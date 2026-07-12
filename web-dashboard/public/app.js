@@ -261,16 +261,30 @@ function renderDetail(jobId) {
   detail.append(renderPackagePanel(job));
 }
 
-function packageField(labelText, key, value, { rows = 3, list = false } = {}) {
+function packageField(section) {
   const label = document.createElement("label");
   label.className = "package-field";
-  const caption = document.createElement("span");
-  caption.textContent = labelText;
-  const input = rows > 1 ? document.createElement("textarea") : document.createElement("input");
-  if (rows > 1) input.rows = rows;
-  input.dataset.packageKey = key;
-  input.value = list ? (value || []).join("\n") : (value || "");
-  label.append(caption, input);
+  const heading = document.createElement("span");
+  heading.className = "package-field-heading";
+  const caption = document.createElement("strong");
+  caption.textContent = section.label;
+  heading.append(caption);
+  if (section.source === "application_question") {
+    const badge = document.createElement("em");
+    badge.textContent = section.required ? "필수 지원서 질문" : "선택 지원서 질문";
+    heading.append(badge);
+  }
+  const input = section.key === "headline" ? document.createElement("input") : document.createElement("textarea");
+  if (input instanceof HTMLTextAreaElement) input.rows = section.kind === "list" ? 4 : 5;
+  input.dataset.packageSectionKey = section.key;
+  if (section.maxLength) input.maxLength = section.maxLength;
+  input.value = section.kind === "list" ? (section.value || []).join("\n") : (section.value || "");
+  const reason = document.createElement("small");
+  const minimum = section.kind === "list"
+    ? `최소 ${section.minItems || 1}개, 각 ${section.minItemLength || 1}자`
+    : `최소 ${section.minLength || 1}자`;
+  reason.textContent = `${section.reason || "등록 이력서에서 선택된 맞춤 수정 항목입니다."} · ${minimum}`;
+  label.append(heading, input, reason);
   return label;
 }
 
@@ -301,7 +315,7 @@ function renderPackagePanel(job) {
 
   if (!job.package) {
     const copy = document.createElement("p");
-    copy.textContent = "이력서 기준을 복제해 이 공고 전용 문안을 만듭니다. 실제 제출 전에는 반드시 직접 검토해야 합니다.";
+    copy.textContent = "등록한 기본 이력서 중 이 공고와 관련 있고 수정이 허용된 항목만 골라 맞춤 문안을 만듭니다. 실제 제출 전에는 반드시 직접 검토해야 합니다.";
     const create = packageAction("맞춤 문안 시작", "primary-button", async () => {
       try {
         const payload = await request(`/api/jobs/${job.id}/package`, { method: "POST", body: "{}" });
@@ -338,25 +352,39 @@ function renderPackagePanel(job) {
   if (editable) {
     const form = document.createElement("div");
     form.className = "package-form";
-    form.append(
-      packageField("헤드라인", "headline", packageValue.content.headline, { rows: 1 }),
-      packageField("경력 요약", "summary", packageValue.content.summary, { rows: 5 }),
-      packageField("핵심 역량 (한 줄에 하나)", "skills", packageValue.content.skills, { rows: 4, list: true }),
-      packageField("주요 경험 (한 줄에 하나)", "experienceHighlights", packageValue.content.experienceHighlights, { rows: 5, list: true }),
-      packageField("지원 동기", "motivation", packageValue.content.motivation, { rows: 5 }),
-      packageField("입사 후 기여 방향", "plan", packageValue.content.plan, { rows: 5 }),
-    );
+    if (packageValue.content.protectedFacts?.length) {
+      const facts = document.createElement("div");
+      facts.className = "protected-facts";
+      const factsTitle = document.createElement("strong");
+      factsTitle.textContent = "사실 보호 항목 · 맞춤 문안에서 수정되지 않습니다";
+      facts.append(factsTitle);
+      for (const fact of packageValue.content.protectedFacts) {
+        const item = document.createElement("span");
+        item.textContent = `${fact.label}: ${fact.value}`;
+        facts.append(item);
+      }
+      form.append(facts);
+    }
+    for (const section of packageValue.content.sections || []) form.append(packageField(section));
+    if (!packageValue.content.sections?.length) {
+      const empty = document.createElement("p");
+      empty.className = "package-frozen";
+      empty.textContent = "기본 이력서에서 내용을 입력하고 맞춤 수정 허용 항목을 선택해 주세요.";
+      form.append(empty);
+    }
     const actions = document.createElement("div");
     actions.className = "package-actions";
     actions.append(packageAction("수정 내용 저장", "secondary-button", async () => {
       const lines = (value) => value.split("\n").map((item) => item.trim()).filter(Boolean);
-      const values = Object.fromEntries([...form.querySelectorAll("[data-package-key]")].map((input) => [input.dataset.packageKey, input.value]));
-      values.skills = lines(values.skills);
-      values.experienceHighlights = lines(values.experienceHighlights);
+      const sectionDefinitions = new Map((packageValue.content.sections || []).map((section) => [section.key, section]));
+      const sections = [...form.querySelectorAll("[data-package-section-key]")].map((input) => {
+        const definition = sectionDefinitions.get(input.dataset.packageSectionKey);
+        return { key: input.dataset.packageSectionKey, value: definition?.kind === "list" ? lines(input.value) : input.value };
+      });
       try {
         const payload = await request(`/api/packages/${packageValue.id}`, {
           method: "PUT",
-          body: JSON.stringify({ ...values, expectedChecksum: packageValue.checksum }),
+          body: JSON.stringify({ sections, expectedChecksum: packageValue.checksum }),
         });
         applyJobs(payload, job.id);
         showToast("수정 내용과 이전 버전을 안전하게 저장했습니다.");
@@ -381,24 +409,40 @@ function renderPackagePanel(job) {
     pdf.textContent = `${packageValue.pdf.fileName} · ${packageValue.pdf.pages}페이지 · 체크섬 ${packageValue.pdf.checksum.slice(0, 12)}`;
     panel.append(pdf);
   }
+  if (packageValue.applicationAnswers?.available) {
+    const answers = document.createElement("p");
+    answers.className = "package-pdf";
+    answers.textContent = `${packageValue.applicationAnswers.fileName} · 지원서 질문 답변은 이력서와 별도로 저장됩니다.`;
+    panel.append(answers);
+  }
   if (packageValue.state === "approved") {
-    panel.append(packageAction("제출본 동결", "primary-button", async () => {
+    const manualSubmissionReady = Boolean(
+      packageValue.pdf?.available
+      && packageValue.approvedChecksum
+      && packageValue.approvedChecksum === packageValue.checksum,
+    );
+    const prepare = packageAction("수기 제출 준비", "primary-button", async () => {
       try {
         const payload = await request(`/api/packages/${packageValue.id}/prepare`, {
           method: "POST",
           body: JSON.stringify({ platform: job.primarySource?.platform || "" }),
         });
         applyJobs(payload, job.id);
-        showToast("제출할 PDF를 별도 경로에 동결했습니다.");
+        showToast("수기 제출할 PDF를 확정했습니다. 채용 플랫폼에서 직접 지원해 주세요.");
       } catch (error) { showToast(error.message, true); }
-    }));
+    });
+    prepare.disabled = !manualSubmissionReady;
+    prepare.title = manualSubmissionReady
+      ? "승인된 PDF를 확정하고 수기 제출 단계로 이동합니다."
+      : "문안 승인과 PDF 준비 상태를 먼저 확인해 주세요.";
+    panel.append(prepare);
   }
   if (packageValue.state === "submit_ready") {
     panel.append(packageAction("제출 완료 기록", "primary-button", async () => {
       try {
         const payload = await request(`/api/packages/${packageValue.id}/submitted`, { method: "POST", body: "{}" });
         applyJobs(payload, job.id);
-        showToast("동결된 제출본을 기준으로 제출 완료를 기록했습니다.");
+        showToast("확정된 제출본을 기준으로 수기 제출 완료를 기록했습니다.");
       } catch (error) { showToast(error.message, true); }
     }));
   }
@@ -425,10 +469,25 @@ async function saveState(job, patch) {
 
 function renderResume() {
   const resume = state.data.resume;
+  $("#resumeJobFamily").value = resume.jobFamily || "";
+  $("#resumeJobRole").value = resume.jobRole || "";
+  $("#resumeCareerType").value = resume.careerType || "new";
+  $("#resumeYearsExperience").value = resume.yearsExperience || "";
+  $("#resumeYearsExperience").disabled = resume.careerType !== "experienced";
+  $("#resumeSchool").value = resume.school || "";
+  $("#resumeMajor").value = resume.major || "";
   $("#resumeHeadline").value = resume.headline || "";
   $("#resumeSummary").value = resume.summary || "";
   $("#resumeSkills").value = (resume.skills || []).join("\n");
   $("#resumeHighlights").value = (resume.experienceHighlights || []).join("\n");
+  $("#resumeCertificates").value = (resume.certificates || []).join("\n");
+  $("#resumeAchievementEvidence").value = resume.achievementEvidence || "";
+  $("#resumeRepresentativeExperience").value = resume.representativeExperience || "";
+  $("#resumeDirectScope").value = resume.directScope || "";
+  $("#resumeCollaborationScope").value = resume.collaborationScope || "";
+  $("#resumeCareerDirection").value = resume.careerDirection || "";
+  const editable = new Set(resume.editableSections || []);
+  $$('[data-editable-section]').forEach((input) => { input.checked = editable.has(input.dataset.editableSection); });
   $("#resumeFilename").value = resume.filenamePattern || "{name}_resume_{company}.pdf";
   $("#resumeSavedAt").textContent = resume.updatedAt ? `마지막 저장 ${formatDateTime(resume.updatedAt)}` : "";
 }
@@ -481,6 +540,9 @@ function bindEvents() {
   $("#statusFilter").addEventListener("change", (event) => { state.filters.status = event.target.value; renderJobs(); });
   $("#lifecycleFilter").addEventListener("change", (event) => { state.filters.lifecycle = event.target.value; renderJobs(); });
   $("#favoriteFilter").addEventListener("change", (event) => { state.filters.favorite = event.target.checked; renderJobs(); });
+  $("#resumeCareerType").addEventListener("change", (event) => {
+    $("#resumeYearsExperience").disabled = event.target.value !== "experienced";
+  });
   $("#resumeForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const lines = (value) => value.split("\n").map((item) => item.trim()).filter(Boolean);
@@ -488,10 +550,23 @@ function bindEvents() {
       const payload = await request("/api/resume", {
         method: "PUT",
         body: JSON.stringify({
+          jobFamily: $("#resumeJobFamily").value,
+          jobRole: $("#resumeJobRole").value,
+          careerType: $("#resumeCareerType").value,
+          yearsExperience: $("#resumeYearsExperience").value,
+          school: $("#resumeSchool").value,
+          major: $("#resumeMajor").value,
           headline: $("#resumeHeadline").value,
           summary: $("#resumeSummary").value,
           skills: lines($("#resumeSkills").value),
           experienceHighlights: lines($("#resumeHighlights").value),
+          certificates: lines($("#resumeCertificates").value),
+          achievementEvidence: $("#resumeAchievementEvidence").value,
+          representativeExperience: $("#resumeRepresentativeExperience").value,
+          directScope: $("#resumeDirectScope").value,
+          collaborationScope: $("#resumeCollaborationScope").value,
+          careerDirection: $("#resumeCareerDirection").value,
+          editableSections: $$('[data-editable-section]:checked').map((input) => input.dataset.editableSection),
           filenamePattern: $("#resumeFilename").value,
         }),
       });

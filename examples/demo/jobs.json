@@ -8,6 +8,10 @@
     "employmentType": "정규직",
     "status": "active",
     "summary": "제품 운영 기준을 정리하고 여러 팀의 실행 흐름을 연결하는 가상 공고입니다.",
+    "tailoringFocus": ["headline", "summary", "experience_highlights", "collaboration_scope", "career_direction"],
+    "applicationQuestions": [
+      { "id": "workflow-improvement", "label": "이 역할에서 개선하고 싶은 업무 흐름을 설명해 주세요.", "required": true, "maxLength": 1500 }
+    ],
     "score": 82,
     "sources": [
       {
@@ -37,6 +41,7 @@
     "employmentType": "정규직",
     "status": "active",
     "summary": "서비스 API와 데이터 흐름을 개선하는 가상 공고입니다.",
+    "tailoringFocus": ["headline", "summary", "skills", "representative_experience"],
     "score": 74,
     "sources": [
       {
@@ -58,6 +63,7 @@
     "employmentType": "계약직",
     "status": "active",
     "summary": "사용 흐름을 설계하고 디자인 시스템을 운영하는 가상 공고입니다.",
+    "tailoringFocus": ["headline", "summary", "representative_experience", "collaboration_scope"],
     "score": 68,
     "sources": [
       {

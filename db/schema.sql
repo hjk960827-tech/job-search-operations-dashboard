@@ -51,11 +51,31 @@ CREATE TABLE IF NOT EXISTS application_state (
 
 CREATE TABLE IF NOT EXISTS resume_profile (
   id INTEGER PRIMARY KEY CHECK(id = 1),
+  job_family TEXT NOT NULL DEFAULT '',
+  job_role TEXT NOT NULL DEFAULT '',
+  career_type TEXT NOT NULL DEFAULT 'new' CHECK(career_type IN ('new', 'experienced')),
+  years_experience REAL,
+  school TEXT NOT NULL DEFAULT '',
+  major TEXT NOT NULL DEFAULT '',
   headline TEXT NOT NULL DEFAULT '',
   summary TEXT NOT NULL DEFAULT '',
   skills_json TEXT NOT NULL DEFAULT '[]',
+  certificates_json TEXT NOT NULL DEFAULT '[]',
   experience_highlights_json TEXT NOT NULL DEFAULT '[]',
+  achievement_evidence TEXT NOT NULL DEFAULT '',
+  representative_experience TEXT NOT NULL DEFAULT '',
+  direct_scope TEXT NOT NULL DEFAULT '',
+  collaboration_scope TEXT NOT NULL DEFAULT '',
+  career_direction TEXT NOT NULL DEFAULT '',
+  editable_sections_json TEXT NOT NULL DEFAULT '["headline","summary","skills","experience_highlights","achievement_evidence","representative_experience","direct_scope","collaboration_scope","career_direction"]',
   filename_pattern TEXT NOT NULL DEFAULT '{name}_resume_{company}.pdf',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS job_tailoring (
+  job_id INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  focus_sections_json TEXT NOT NULL DEFAULT '[]',
+  application_questions_json TEXT NOT NULL DEFAULT '[]',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -74,6 +94,7 @@ CREATE TABLE IF NOT EXISTS application_packages (
   content_json_path TEXT NOT NULL,
   resume_markdown_path TEXT NOT NULL,
   resume_html_path TEXT NOT NULL,
+  application_answers_path TEXT NOT NULL DEFAULT '',
   resume_pdf_path TEXT NOT NULL DEFAULT '',
   resume_pdf_checksum TEXT NOT NULL DEFAULT '',
   resume_pdf_pages INTEGER NOT NULL DEFAULT 0,

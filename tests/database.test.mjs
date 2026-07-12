@@ -62,13 +62,31 @@ test("application state and resume edits remain in the selected database", () =>
     assert.equal(jobs[0].application.workflowStatus, "reviewing");
 
     saveResume(db, {
+      jobFamily: "Engineering",
+      jobRole: "Platform Engineer",
+      careerType: "experienced",
+      yearsExperience: 2.5,
+      school: "Sample University",
+      major: "Computer Science",
       headline: "Sample headline",
       summary: "Sample summary",
       skills: ["One", "Two"],
+      certificates: ["Sample Certificate"],
       experienceHighlights: ["Result"],
+      achievementEvidence: "Verified result",
+      representativeExperience: "Representative project",
+      directScope: "Direct contribution",
+      collaborationScope: "Cross-functional work",
+      careerDirection: "Document decisions and verify results",
+      editableSections: ["summary", "skills", "representative_experience"],
       filenamePattern: "{name}_{company}.pdf",
     });
-    assert.deepEqual(getResume(db).skills, ["One", "Two"]);
+    const resume = getResume(db);
+    assert.deepEqual(resume.skills, ["One", "Two"]);
+    assert.equal(resume.jobRole, "Platform Engineer");
+    assert.equal(resume.yearsExperience, "2.5");
+    assert.deepEqual(resume.certificates, ["Sample Certificate"]);
+    assert.deepEqual(resume.editableSections, ["summary", "skills", "representative_experience"]);
     db.close();
   } finally {
     fs.rmSync(temp.directory, { recursive: true, force: true });
@@ -92,6 +110,54 @@ test("sources disabled for display are excluded from dashboard payload", () => {
     const jobs = listJobs(db, sources);
     assert.deepEqual(jobs[0].sources.map((source) => source.platform), ["wanted"]);
     assert.equal(jobs[0].primarySource.platform, "wanted");
+    db.close();
+  } finally {
+    fs.rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("reimport without tailoring fields preserves existing focus and questions", () => {
+  const temp = temporaryDatabase();
+  try {
+    initializeDatabase(temp.file, { mode: "personal" });
+    const db = openDatabase(temp.file);
+    const jobId = importJob(db, {
+      jobKey: "preserve-tailoring",
+      companyName: "Sample Company",
+      title: "Sample Role",
+      tailoringFocus: ["summary", "skills"],
+      applicationQuestions: [{ id: "fit", label: "직무 적합성을 설명해 주세요.", required: true }],
+      sources: [{ platform: "direct", url: "https://example.invalid/preserve", status: "active" }],
+    });
+    importJob(db, {
+      jobKey: "preserve-tailoring",
+      companyName: "Sample Company Updated",
+      title: "Sample Role Updated",
+      sources: [{ platform: "direct", url: "https://example.invalid/preserve", status: "active" }],
+    });
+    const tailoring = db.prepare("SELECT * FROM job_tailoring WHERE job_id = ?").get(jobId);
+    assert.deepEqual(JSON.parse(tailoring.focus_sections_json), ["summary", "skills"]);
+    assert.deepEqual(JSON.parse(tailoring.application_questions_json), [
+      { id: "fit", label: "직무 적합성을 설명해 주세요.", required: true, maxLength: 2000 },
+    ]);
+    db.close();
+  } finally {
+    fs.rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
+test("blank experience years remain unset instead of becoming zero", () => {
+  const temp = temporaryDatabase();
+  try {
+    initializeDatabase(temp.file, { mode: "personal" });
+    const db = openDatabase(temp.file);
+    saveResume(db, {
+      careerType: "experienced",
+      yearsExperience: "   ",
+      editableSections: [],
+    });
+    assert.equal(getResume(db).yearsExperience, "");
+    assert.equal(db.prepare("SELECT years_experience FROM resume_profile WHERE id = 1").get().years_experience, null);
     db.close();
   } finally {
     fs.rmSync(temp.directory, { recursive: true, force: true });

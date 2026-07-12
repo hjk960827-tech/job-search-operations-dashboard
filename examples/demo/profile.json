@@ -1,11 +1,27 @@
 {
   "displayName": "예시 사용자",
+  "jobFamily": "Operations",
+  "jobRole": "Operations Coordinator",
+  "careerType": "experienced",
+  "yearsExperience": 3,
+  "school": "예시대학교",
+  "major": "융합학",
   "headline": "관심 직무를 탐색하는 구직자",
   "summary": "이 화면의 모든 정보는 제품 동작을 설명하기 위한 가상 데이터입니다.",
   "skills": ["협업", "문제 해결", "문서화"],
+  "certificates": ["예시 업무 인증"],
   "experienceHighlights": [
     "서로 다른 업무 요구를 정리하고 실행 순서를 조율했습니다.",
     "결과를 검토해 다음 개선 항목을 문서로 남겼습니다."
+  ],
+  "achievementEvidence": "반복 업무의 처리 기준을 문서화하고 검토 시간을 줄인 가상 사례입니다.",
+  "representativeExperience": "여러 팀의 요청을 분류하고 담당자와 완료 기준을 합의한 가상 프로젝트입니다.",
+  "directScope": "요구사항 정리, 진행 상태 관리, 결과 문서화를 직접 담당했습니다.",
+  "collaborationScope": "제품, 개발, 디자인 등 서로 다른 역할의 구성원과 협업했습니다.",
+  "careerDirection": "문제를 직무 관행에 맞추기보다 사용자와 팀이 확인할 수 있는 기준으로 구조화합니다.",
+  "editableSections": [
+    "headline", "summary", "skills", "experience_highlights", "achievement_evidence",
+    "representative_experience", "direct_scope", "collaboration_scope", "career_direction"
   ],
   "filenamePattern": "{name}_resume_{company}.pdf"
 }

@@ -7,6 +7,11 @@ sections:
   - summary
   - skills
   - experience_highlights
+  - achievement_evidence
+  - representative_experience
+  - direct_scope
+  - collaboration_scope
+  - career_direction
 asset_roots: []
 quality_rules:
   require_user_review: true

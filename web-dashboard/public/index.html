@@ -102,6 +102,35 @@
             <span id="resumeSavedAt" class="subtle"></span>
           </div>
           <form id="resumeForm" class="resume-form card">
+            <div class="form-grid">
+              <label>
+                <span>직무 분야</span>
+                <input id="resumeJobFamily" maxlength="160" placeholder="예: Engineering, Design, Operations">
+              </label>
+              <label>
+                <span>목표 직무</span>
+                <input id="resumeJobRole" maxlength="160" placeholder="예: Backend Engineer">
+              </label>
+              <label>
+                <span>경력 구분</span>
+                <select id="resumeCareerType">
+                  <option value="new">신입</option>
+                  <option value="experienced">경력</option>
+                </select>
+              </label>
+              <label>
+                <span>총 경력 연수</span>
+                <input id="resumeYearsExperience" type="number" min="0" max="80" step="0.5" placeholder="경력 선택 시 입력">
+              </label>
+              <label>
+                <span>학교</span>
+                <input id="resumeSchool" maxlength="240" placeholder="선택 입력">
+              </label>
+              <label>
+                <span>전공</span>
+                <input id="resumeMajor" maxlength="240" placeholder="선택 입력">
+              </label>
+            </div>
             <label>
               <span>헤드라인</span>
               <input id="resumeHeadline" maxlength="300" placeholder="목표 직무에 맞는 한 줄 소개">
@@ -119,7 +148,46 @@
                 <span>경력 하이라이트</span>
                 <textarea id="resumeHighlights" rows="7" placeholder="한 줄에 하나씩 입력"></textarea>
               </label>
+              <label>
+                <span>자격·인증</span>
+                <textarea id="resumeCertificates" rows="5" placeholder="한 줄에 하나씩 입력"></textarea>
+              </label>
+              <label>
+                <span>성과 근거</span>
+                <textarea id="resumeAchievementEvidence" rows="5" maxlength="6000" placeholder="확인 가능한 결과와 근거"></textarea>
+              </label>
+              <label>
+                <span>대표 경험</span>
+                <textarea id="resumeRepresentativeExperience" rows="5" maxlength="6000" placeholder="직무와 연결되는 대표 경험"></textarea>
+              </label>
+              <label>
+                <span>직접 담당 범위</span>
+                <textarea id="resumeDirectScope" rows="5" maxlength="6000" placeholder="본인이 직접 수행한 범위"></textarea>
+              </label>
+              <label>
+                <span>협업 범위</span>
+                <textarea id="resumeCollaborationScope" rows="5" maxlength="6000" placeholder="협업한 조직과 역할"></textarea>
+              </label>
+              <label>
+                <span>직무 관점 / 일하는 방식</span>
+                <textarea id="resumeCareerDirection" rows="5" maxlength="6000" placeholder="문제를 바라보고 일하는 방식"></textarea>
+              </label>
             </div>
+            <fieldset class="editable-sections">
+              <legend>공고별 맞춤 수정 허용 항목</legend>
+              <p>체크한 항목만 공고별 맞춤 문안에서 수정할 수 있습니다. 학력·경력 구분·자격 정보는 사실 보호 항목으로 잠깁니다.</p>
+              <div class="checkbox-grid">
+                <label><input type="checkbox" data-editable-section="headline"> 헤드라인</label>
+                <label><input type="checkbox" data-editable-section="summary"> 경력 요약</label>
+                <label><input type="checkbox" data-editable-section="skills"> 핵심 기술·역량</label>
+                <label><input type="checkbox" data-editable-section="experience_highlights"> 경력 하이라이트</label>
+                <label><input type="checkbox" data-editable-section="achievement_evidence"> 성과 근거</label>
+                <label><input type="checkbox" data-editable-section="representative_experience"> 대표 경험</label>
+                <label><input type="checkbox" data-editable-section="direct_scope"> 직접 담당 범위</label>
+                <label><input type="checkbox" data-editable-section="collaboration_scope"> 협업 범위</label>
+                <label><input type="checkbox" data-editable-section="career_direction"> 직무 관점 / 일하는 방식</label>
+              </div>
+            </fieldset>
             <label>
               <span>파일명 규칙</span>
               <input id="resumeFilename" maxlength="160" placeholder="{name}_resume_{company}.pdf">

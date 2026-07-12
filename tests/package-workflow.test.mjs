@@ -11,6 +11,7 @@ import {
 } from "../lib/database.mjs";
 import {
   approvePackage,
+  buildPackageContent,
   createPackage,
   prepareSubmission,
   recordSubmitted,
@@ -27,9 +28,17 @@ function fixture() {
     companyName: "Example Company",
     title: "Example Role",
     status: "active",
+    tailoringFocus: ["headline", "summary", "skills", "experience_highlights", "career_direction"],
+    applicationQuestions: [{ id: "role-fit", label: "이 역할에 기여할 방식을 설명해 주세요.", required: true }],
     sources: [{ platform: "direct", url: "https://example.invalid/role", status: "active", confidence: 100 }],
   });
   saveResume(db, {
+    jobFamily: "Operations",
+    jobRole: "Operations Specialist",
+    careerType: "experienced",
+    yearsExperience: 4,
+    school: "Example University",
+    major: "Interdisciplinary Studies",
     headline: "문제를 구조화하고 실행을 연결하는 지원자",
     summary: "여러 이해관계자의 요구를 정리하고 우선순위를 합의한 뒤 실행 결과를 검토해 다음 개선으로 연결한 경험을 갖고 있습니다. 사실과 근거가 확인된 내용만 문서에 사용합니다.",
     skills: ["문제 구조화", "협업과 실행 관리"],
@@ -37,6 +46,9 @@ function fixture() {
       "복수 팀의 요구사항을 하나의 실행 목록으로 정리하고 담당자와 일정을 명확히 했습니다.",
       "완료 결과를 기준과 대조해 누락 항목을 찾고 다음 반복 작업에 반영했습니다.",
     ],
+    certificates: ["Example Certificate"],
+    careerDirection: "사용자와 팀이 같은 기준으로 판단할 수 있도록 문제와 실행 과정을 문서화합니다.",
+    editableSections: ["headline", "summary", "skills", "experience_highlights", "career_direction"],
   });
   return {
     db,
@@ -53,18 +65,15 @@ function fixture() {
   };
 }
 
-function completeContent() {
-  return {
-    headline: "문제를 구조화하고 실행을 연결하는 지원자",
-    summary: "여러 이해관계자의 요구를 정리하고 우선순위를 합의한 뒤 실행 결과를 검토해 다음 개선으로 연결한 경험을 갖고 있습니다. 사실과 근거가 확인된 내용만 문서에 사용합니다.",
-    skills: ["문제 구조화", "협업과 실행 관리"],
-    experienceHighlights: [
-      "복수 팀의 요구사항을 하나의 실행 목록으로 정리하고 담당자와 일정을 명확히 했습니다.",
-      "완료 결과를 기준과 대조해 누락 항목을 찾고 다음 반복 작업에 반영했습니다.",
-    ],
-    motivation: "이 역할이 요구하는 문제 정의와 협업 방식이 제가 검증해 온 실행 경험과 맞닿아 있습니다. 공고에 적힌 책임 범위를 기준으로 실제 기여할 수 있는 부분을 구체적으로 확인하고 지원했습니다.",
-    plan: "입사 후에는 현재 업무 흐름과 성공 기준을 먼저 확인하고, 작은 개선안을 실행해 결과를 측정하겠습니다. 확인된 결과를 바탕으로 다음 우선순위를 팀과 합의하겠습니다.",
-  };
+function completeSections(packageValue, overrides = {}) {
+  return packageValue.content.sections.map((section) => ({
+    key: section.key,
+    value: Object.hasOwn(overrides, section.key)
+      ? overrides[section.key]
+      : section.source === "application_question"
+        ? "현재 업무 흐름과 성공 기준을 먼저 확인하고, 작은 개선안을 실행해 결과를 검토한 뒤 다음 우선순위를 팀과 합의하겠습니다."
+        : section.value,
+  }));
 }
 
 function fakePdf(pages) {
@@ -80,13 +89,14 @@ test("package edits persist artifacts, create revisions, and reject stale checks
   try {
     packageValue = createPackage(value.db, value.jobId);
     assert.equal(packageValue.state, "quality_hold");
-    const updated = updatePackage(value.db, packageValue.id, { ...completeContent(), expectedChecksum: packageValue.checksum });
+    assert.equal(packageValue.quality.score, 79);
+    const updated = updatePackage(value.db, packageValue.id, { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum });
     assert.equal(updated.state, "approval_pending");
     assert.equal(updated.quality.status, "passed");
     assert.equal(fs.existsSync(updated.artifacts.htmlPath), true);
     assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_revisions WHERE package_id = ?").get(packageValue.id).count, 1);
     assert.throws(
-      () => updatePackage(value.db, packageValue.id, { plan: "stale edit", expectedChecksum: packageValue.checksum }),
+      () => updatePackage(value.db, packageValue.id, { sections: completeSections(updated), expectedChecksum: packageValue.checksum }),
       /changed in another session/,
     );
   } finally {
@@ -103,7 +113,7 @@ test("database failure restores files and removes incomplete revision snapshot",
     assert.throws(() => updatePackage(
       value.db,
       packageValue.id,
-      { ...completeContent(), expectedChecksum: packageValue.checksum },
+      { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum },
       { beforeCommit: () => { throw new Error("forced database failure"); } },
     ), /forced database failure/);
     assert.equal(fs.readFileSync(packageValue.artifacts.markdownPath, "utf8"), before);
@@ -119,7 +129,7 @@ test("approval rejects four pages, accepts three pages, and rolls back on databa
   let packageValue;
   try {
     packageValue = createPackage(value.db, value.jobId);
-    let updated = updatePackage(value.db, packageValue.id, { ...completeContent(), expectedChecksum: packageValue.checksum });
+    let updated = updatePackage(value.db, packageValue.id, { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum });
     await assert.rejects(() => approvePackage(value.db, updated.id, { renderer: fakePdf(4) }), /must contain 1-3 pages/);
     assert.equal(fs.existsSync(path.join(updated.artifacts.directory, "resume.pdf")), false);
     await assert.rejects(() => approvePackage(value.db, updated.id, {
@@ -140,11 +150,12 @@ test("editing an approved package archives its PDF and invalidates approval", as
   let packageValue;
   try {
     packageValue = createPackage(value.db, value.jobId);
-    let updated = updatePackage(value.db, packageValue.id, { ...completeContent(), expectedChecksum: packageValue.checksum });
+    let updated = updatePackage(value.db, packageValue.id, { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum });
     updated = await approvePackage(value.db, updated.id, { renderer: fakePdf(1) });
     const previousPdf = updated.artifacts.pdfPath;
+    const revisedDirection = `${updated.content.sections.find((section) => section.key === "career_direction").value}\n\n검토 결과를 문서로 남겨 팀이 같은 기준을 사용하도록 하겠습니다.`;
     updated = updatePackage(value.db, updated.id, {
-      plan: `${updated.content.plan}\n\n검토 결과를 문서로 남겨 팀이 같은 기준을 사용하도록 하겠습니다.`,
+      sections: completeSections(updated, { career_direction: revisedDirection }),
       expectedChecksum: updated.checksum,
     });
     assert.equal(updated.state, "approval_pending");
@@ -162,8 +173,10 @@ test("submission freezes a verified PDF and blocks later package edits", async (
   let packageValue;
   try {
     packageValue = createPackage(value.db, value.jobId);
-    let updated = updatePackage(value.db, packageValue.id, { ...completeContent(), expectedChecksum: packageValue.checksum });
+    let updated = updatePackage(value.db, packageValue.id, { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum });
     updated = await approvePackage(value.db, updated.id, { renderer: fakePdf(1) });
+    assert.equal(updated.approvedChecksum, updated.checksum);
+    assert.equal(Boolean(updated.artifacts.pdfPath), true);
     assert.throws(() => prepareSubmission(value.db, updated.id, {
       platform: "direct",
       beforeCommit: () => { throw new Error("forced prepare failure"); },
@@ -175,7 +188,7 @@ test("submission freezes a verified PDF and blocks later package edits", async (
     assert.equal(submission.status, "submit_ready");
     assert.notEqual(submission.frozen_pdf_path, updated.artifacts.pdfPath);
     assert.equal(fs.existsSync(submission.frozen_pdf_path), true);
-    assert.throws(() => updatePackage(value.db, updated.id, { plan: "late edit", expectedChecksum: updated.checksum }), /cannot be edited/);
+    assert.throws(() => updatePackage(value.db, updated.id, { sections: completeSections(updated), expectedChecksum: updated.checksum }), /cannot be edited/);
     fs.appendFileSync(updated.artifacts.pdfPath, "current file changed after freezing");
     updated = recordSubmitted(value.db, updated.id);
     assert.equal(updated.state, "submitted");
@@ -192,9 +205,146 @@ test("stored artifact paths cannot escape the release data directory", () => {
     packageValue = createPackage(value.db, value.jobId);
     value.db.prepare("UPDATE application_packages SET resume_html_path = ? WHERE id = ?").run(path.join(os.tmpdir(), "outside.html"), packageValue.id);
     assert.throws(
-      () => updatePackage(value.db, packageValue.id, { ...completeContent(), expectedChecksum: packageValue.checksum }),
+      () => updatePackage(value.db, packageValue.id, { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum }),
       /outside the package data directory|must stay inside/,
     );
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("tailored fields follow each job focus and never add fixed marketing sections", () => {
+  const value = fixture();
+  let firstPackage;
+  try {
+    firstPackage = createPackage(value.db, value.jobId);
+    assert.deepEqual(firstPackage.content.sections.map((section) => section.key), [
+      "headline", "summary", "skills", "experience_highlights", "career_direction", "question:role-fit",
+    ]);
+    assert.equal(firstPackage.content.sections.some((section) => ["motivation", "plan", "growth", "viewpoint"].includes(section.key)), false);
+    assert.deepEqual(firstPackage.content.protectedFacts.map((fact) => fact.key), [
+      "job_family", "job_role", "career", "school", "major", "certificates",
+    ]);
+
+    const secondJobId = importJob(value.db, {
+      jobKey: `second-${path.basename(value.directory)}`,
+      companyName: "Second Company",
+      title: "Different Role",
+      status: "active",
+      tailoringFocus: ["summary", "career_direction"],
+      sources: [{ platform: "direct", url: "https://example.invalid/second", status: "active" }],
+    });
+    const secondPackage = createPackage(value.db, secondJobId);
+    assert.deepEqual(secondPackage.content.sections.map((section) => section.key), ["summary", "career_direction"]);
+  } finally {
+    value.cleanup(firstPackage);
+  }
+});
+
+test("package updates can change values only, not protected facts or section definitions", () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    const protectedBefore = structuredClone(packageValue.content.protectedFacts);
+    const updated = updatePackage(value.db, packageValue.id, {
+      expectedChecksum: packageValue.checksum,
+      protectedFacts: [{ key: "career", label: "경력 구분", value: "변조" }],
+      sections: [
+        { key: "summary", label: "변조된 제목", source: "application_question", value: "검증된 사실을 바탕으로 공고에 맞게 요약 내용을 조정했습니다." },
+        { key: "unknown", value: "추가 시도" },
+        { key: "question:role-fit", value: "업무 기준을 확인하고 작은 개선부터 검증하겠습니다." },
+      ],
+    });
+    assert.deepEqual(updated.content.protectedFacts, protectedBefore);
+    assert.equal(updated.content.sections.find((section) => section.key === "summary").label, "경력 요약");
+    assert.equal(updated.content.sections.find((section) => section.key === "summary").source, "resume");
+    assert.equal(updated.content.sections.some((section) => section.key === "unknown"), false);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("an unconfigured profile does not infer a career fact", () => {
+  const content = buildPackageContent({
+    career_type: "new",
+    years_experience: null,
+    certificates_json: "[]",
+    editable_sections_json: "[]",
+  });
+  assert.deepEqual(content.protectedFacts, []);
+  assert.deepEqual(content.sections, []);
+});
+
+test("application questions alone cannot make a resume package approvable", () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    const questionOnlyJobId = importJob(value.db, {
+      jobKey: `question-only-${path.basename(value.directory)}`,
+      companyName: "Question Company",
+      title: "Question Role",
+      status: "active",
+      tailoringFocus: ["achievement_evidence"],
+      applicationQuestions: [{ id: "required", label: "지원 이유를 설명해 주세요.", required: true }],
+      sources: [{ platform: "direct", url: "https://example.invalid/question-only", status: "active" }],
+    });
+    packageValue = createPackage(value.db, questionOnlyJobId);
+    const updated = updatePackage(value.db, packageValue.id, {
+      expectedChecksum: packageValue.checksum,
+      sections: [{
+        key: "question:required",
+        value: "공고의 업무 기준을 확인하고 제가 검증한 경험과 연결되는 부분을 구체적으로 설명하겠습니다.",
+      }],
+    });
+    assert.equal(updated.state, "quality_hold");
+    assert.equal(updated.quality.status, "review");
+    assert.equal(updated.quality.score, 0);
+    assert.equal(updated.quality.findings.some((finding) => finding.key === "resume_sections"), true);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("one-character resume sections fail section-specific minimum quality", () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    const shortJobId = importJob(value.db, {
+      jobKey: `short-section-${path.basename(value.directory)}`,
+      companyName: "Short Company",
+      title: "Short Role",
+      status: "active",
+      tailoringFocus: ["summary"],
+      sources: [{ platform: "direct", url: "https://example.invalid/short", status: "active" }],
+    });
+    packageValue = createPackage(value.db, shortJobId);
+    const updated = updatePackage(value.db, packageValue.id, {
+      expectedChecksum: packageValue.checksum,
+      sections: [{ key: "summary", value: "가" }],
+    });
+    assert.equal(updated.state, "quality_hold");
+    assert.equal(updated.quality.status, "review");
+    assert.equal(updated.quality.findings.some((finding) => finding.key === "summary"), true);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("resume markdown and application answers are stored as separate artifacts", () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    const updated = updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue),
+      expectedChecksum: packageValue.checksum,
+    });
+    const resumeMarkdown = fs.readFileSync(updated.artifacts.markdownPath, "utf8");
+    const answersMarkdown = fs.readFileSync(updated.artifacts.applicationAnswersPath, "utf8");
+    assert.doesNotMatch(resumeMarkdown, /이 역할에 기여할 방식을 설명해 주세요/);
+    assert.match(answersMarkdown, /이 역할에 기여할 방식을 설명해 주세요/);
+    assert.match(answersMarkdown, /현재 업무 흐름과 성공 기준/);
   } finally {
     value.cleanup(packageValue);
   }
