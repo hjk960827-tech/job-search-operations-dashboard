@@ -1,0 +1,52 @@
+# Local configuration
+config/profile.yml
+config/search.yml
+config/sources.yml
+config/resume.yml
+.env
+.env.*
+!.env.example
+
+# Personal and generated data
+data/*
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.bak
+*.backup*
+backups/
+raw/
+reports/
+output/
+logs/
+tmp/
+
+# Application packages and private documents
+cv.md
+resume/
+resumes/
+portfolio/
+portfolios/
+application-packages/
+support-packages/
+evidence/
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+
+# Local agent state and dependencies
+.claude/settings.local.json
+.claude/memory/
+.codex/
+node_modules/
+npm-debug.log*
+.DS_Store
+
+# Local security reports may contain filesystem paths
+.pre_publish_safety_report.*
+pre_publish_safety_report.*

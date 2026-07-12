@@ -1,0 +1,19 @@
+setup_complete: false
+identity:
+  display_name: ""
+  email: ""
+  phone: ""
+location:
+  country: KR
+  regions: []
+  timezone: Asia/Seoul
+career:
+  years_experience: null
+  current_level: ""
+preferences:
+  employment_types: []
+  work_modes: []
+  salary:
+    currency: KRW
+    minimum: null
+    target: null

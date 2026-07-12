@@ -1,0 +1,11 @@
+{
+  "displayName": "예시 사용자",
+  "headline": "관심 직무를 탐색하는 구직자",
+  "summary": "이 화면의 모든 정보는 제품 동작을 설명하기 위한 가상 데이터입니다.",
+  "skills": ["협업", "문제 해결", "문서화"],
+  "experienceHighlights": [
+    "서로 다른 업무 요구를 정리하고 실행 순서를 조율했습니다.",
+    "결과를 검토해 다음 개선 항목을 문서로 남겼습니다."
+  ],
+  "filenamePattern": "{name}_resume_{company}.pdf"
+}

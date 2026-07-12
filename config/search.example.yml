@@ -1,0 +1,18 @@
+setup_complete: false
+target_roles: []
+include_keywords: []
+exclude_keywords: []
+experience:
+  minimum_years: null
+  maximum_years: null
+target_tracks: []
+company_preferences:
+  include: []
+  exclude: []
+scoring:
+  review_below: 86
+  role_match: 40
+  experience_match: 20
+  location_match: 15
+  employment_match: 10
+  user_preferences: 15

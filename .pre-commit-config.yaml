@@ -1,0 +1,13 @@
+repos:
+  - repo: local
+    hooks:
+      - id: job-search-operations-security
+        name: Job Search Operations safety gate
+        entry: npm run security:check
+        language: system
+        pass_filenames: false
+      - id: job-search-operations-tests
+        name: Job Search Operations tests
+        entry: npm test
+        language: system
+        pass_filenames: false

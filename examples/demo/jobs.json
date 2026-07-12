@@ -1,0 +1,81 @@
+[
+  {
+    "jobKey": "demo-northstar-product-operations",
+    "companyName": "노스스타랩",
+    "title": "Product Operations Manager",
+    "track": "Product",
+    "location": "서울 또는 원격",
+    "employmentType": "정규직",
+    "status": "active",
+    "summary": "제품 운영 기준을 정리하고 여러 팀의 실행 흐름을 연결하는 가상 공고입니다.",
+    "score": 82,
+    "sources": [
+      {
+        "platform": "direct",
+        "url": "https://careers.example.invalid/jobs/product-operations",
+        "externalId": "demo-direct-001",
+        "status": "active",
+        "confidence": 100,
+        "checkedAt": "2026-01-01T00:00:00Z"
+      },
+      {
+        "platform": "wanted",
+        "url": "https://wanted.example.invalid/jobs/1001",
+        "externalId": "demo-wanted-1001",
+        "status": "active",
+        "confidence": 90,
+        "checkedAt": "2026-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "jobKey": "demo-bluebridge-backend",
+    "companyName": "블루브리지",
+    "title": "Backend Engineer",
+    "track": "Engineering",
+    "location": "대한민국",
+    "employmentType": "정규직",
+    "status": "active",
+    "summary": "서비스 API와 데이터 흐름을 개선하는 가상 공고입니다.",
+    "score": 74,
+    "sources": [
+      {
+        "platform": "linkedin",
+        "url": "https://linkedin.example.invalid/jobs/2001",
+        "externalId": "demo-linkedin-2001",
+        "status": "active",
+        "confidence": 80,
+        "checkedAt": "2026-01-01T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "jobKey": "demo-greenfield-designer",
+    "companyName": "그린필드스튜디오",
+    "title": "Product Designer",
+    "track": "Design",
+    "location": "부산 또는 원격",
+    "employmentType": "계약직",
+    "status": "active",
+    "summary": "사용 흐름을 설계하고 디자인 시스템을 운영하는 가상 공고입니다.",
+    "score": 68,
+    "sources": [
+      {
+        "platform": "jobkorea",
+        "url": "https://jobkorea.example.invalid/jobs/3001",
+        "externalId": "demo-jobkorea-3001",
+        "status": "active",
+        "confidence": 75,
+        "checkedAt": "2026-01-01T00:00:00Z"
+      },
+      {
+        "platform": "direct",
+        "url": "https://greenfield.example.invalid/careers/designer",
+        "externalId": "demo-direct-003",
+        "status": "closed",
+        "confidence": 100,
+        "checkedAt": "2026-01-01T00:00:00Z"
+      }
+    ]
+  }
+]

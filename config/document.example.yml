@@ -1,0 +1,16 @@
+setup_complete: false
+filename_pattern: "{name}_resume_{company}.pdf"
+tone: clear
+target_tracks: []
+sections:
+  - headline
+  - summary
+  - skills
+  - experience_highlights
+asset_roots: []
+quality_rules:
+  require_user_review: true
+  prohibit_unsupported_metrics: true
+  prohibit_auto_submit: true
+  minimum_score: 80
+  maximum_pdf_pages: 3

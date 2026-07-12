@@ -1,0 +1,14 @@
+[
+  {
+    "jobKey": "demo-northstar-product-operations",
+    "favorite": true,
+    "workflowStatus": "reviewing",
+    "note": "예시 상태입니다."
+  },
+  {
+    "jobKey": "demo-bluebridge-backend",
+    "favorite": false,
+    "workflowStatus": "new",
+    "note": ""
+  }
+]
