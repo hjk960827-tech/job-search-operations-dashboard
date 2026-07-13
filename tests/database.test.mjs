@@ -146,6 +146,38 @@ test("reimport without tailoring fields preserves existing focus and questions",
   }
 });
 
+test("validation failures carry client-facing status codes", () => {
+  const temp = temporaryDatabase();
+  try {
+    initializeDatabase(temp.file, { mode: "personal" });
+    const db = openDatabase(temp.file);
+    const jobId = importJob(db, {
+      jobKey: "status-code-check",
+      companyName: "Sample Company",
+      title: "Sample Role",
+      sources: [{ platform: "direct", url: "https://example.invalid/job", status: "active" }],
+    });
+    assert.throws(() => updateApplicationState(db, 99999, { favorite: true }), (error) => error.statusCode === 404);
+    assert.throws(() => updateApplicationState(db, jobId, { workflowStatus: "bogus" }), (error) => error.statusCode === 400);
+    assert.throws(() => importJob(db, { companyName: "Sample", title: "Role" }), (error) => error.statusCode === 400);
+    assert.throws(() => importJob(db, {
+      jobKey: "bad-url",
+      companyName: "Sample",
+      title: "Role",
+      sources: [{ platform: "direct", url: "not-a-url" }],
+    }), (error) => error.statusCode === 400);
+    assert.throws(() => importJob(db, {
+      jobKey: "bad-score",
+      companyName: "Sample",
+      title: "Role",
+      score: "high",
+    }), (error) => error.statusCode === 400);
+    db.close();
+  } finally {
+    fs.rmSync(temp.directory, { recursive: true, force: true });
+  }
+});
+
 test("blank experience years remain unset instead of becoming zero", () => {
   const temp = temporaryDatabase();
   try {
