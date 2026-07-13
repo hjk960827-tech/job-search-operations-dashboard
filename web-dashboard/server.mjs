@@ -171,6 +171,10 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (request.method === "PUT" && url.pathname === "/api/resume") {
+      if (effectiveMode !== "personal") {
+        sendError(response, 409, "Complete personal setup before saving a real resume");
+        return;
+      }
       const resume = saveResume(db, await readJson(request));
       sendJson(response, 200, { ok: true, resume });
       return;

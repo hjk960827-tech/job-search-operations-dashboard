@@ -50,6 +50,13 @@ test("server exposes demo data, blocks real imports, and prevents static path es
     });
     assert.equal(blockedImport.status, 409);
 
+    const blockedResume = await fetch(`http://127.0.0.1:${port}/api/resume`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ headline: "실제 개인정보", summary: "데모 DB에 저장되면 안 됩니다." }),
+    });
+    assert.equal(blockedResume.status, 409);
+
     const escaped = await fetch(`http://127.0.0.1:${port}/..%2fpackage.json`);
     assert.equal(escaped.status, 403);
   } finally {
