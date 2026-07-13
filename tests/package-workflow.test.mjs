@@ -13,6 +13,7 @@ import {
   approvePackage,
   buildPackageContent,
   createPackage,
+  evaluatePackageQuality,
   prepareSubmission,
   recordSubmitted,
   updatePackage,
@@ -348,4 +349,42 @@ test("resume markdown and application answers are stored as separate artifacts",
   } finally {
     value.cleanup(packageValue);
   }
+});
+
+test("technical angle-bracket terms are not flagged as placeholders", () => {
+  const result = evaluatePackageQuality({
+    sections: [
+      { key: "headline", label: "헤드라인", kind: "text", value: "백엔드 엔지니어 5년차", source: "resume", required: true, minLength: 8 },
+      {
+        key: "summary",
+        label: "경력 요약",
+        kind: "text",
+        value: "C++ STL <vector> 최적화와 React <Suspense> 도입으로 서비스 응답 속도를 40% 개선한 경험이 있습니다.",
+        source: "resume",
+        required: true,
+        minLength: 30,
+      },
+    ],
+  });
+  assert.equal(result.findings.some((finding) => finding.key === "placeholder"), false);
+  assert.equal(result.status, "passed");
+});
+
+test("hangul angle-bracket placeholders still block approval", () => {
+  const result = evaluatePackageQuality({
+    sections: [
+      { key: "headline", label: "헤드라인", kind: "text", value: "백엔드 엔지니어 5년차", source: "resume", required: true, minLength: 8 },
+      {
+        key: "summary",
+        label: "경력 요약",
+        kind: "text",
+        value: "<회사명>의 미션에 공감하여 지원했으며 실행 결과를 검토해 다음 개선으로 연결한 경험이 있습니다.",
+        source: "resume",
+        required: true,
+        minLength: 30,
+      },
+    ],
+  });
+  assert.equal(result.findings.some((finding) => finding.key === "placeholder"), true);
+  assert.equal(result.status, "review");
 });
