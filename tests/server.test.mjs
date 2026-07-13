@@ -2,10 +2,23 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function rawStatus(options, body) {
+  return new Promise((resolve, reject) => {
+    const request = http.request(options, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response.statusCode));
+    });
+    request.once("error", reject);
+    if (body) request.write(body);
+    request.end();
+  });
+}
 
 function waitForServer(child) {
   return new Promise((resolve, reject) => {
@@ -59,6 +72,33 @@ test("server exposes demo data, blocks real imports, and prevents static path es
 
     const escaped = await fetch(`http://127.0.0.1:${port}/..%2fpackage.json`);
     assert.equal(escaped.status, 403);
+
+    const forgedHost = await rawStatus({
+      host: "127.0.0.1",
+      port,
+      path: "/api/health",
+      method: "GET",
+      headers: { host: `evil.example:${port}` },
+    });
+    assert.equal(forgedHost, 403);
+
+    const forgedOrigin = await rawStatus({
+      host: "127.0.0.1",
+      port,
+      path: "/api/jobs/1/state",
+      method: "PATCH",
+      headers: { origin: "https://evil.example", "content-type": "application/json" },
+    }, JSON.stringify({ favorite: true }));
+    assert.equal(forgedOrigin, 403);
+
+    const wrongContentType = await rawStatus({
+      host: "127.0.0.1",
+      port,
+      path: "/api/jobs/1/state",
+      method: "PATCH",
+      headers: { "content-type": "text/plain" },
+    }, JSON.stringify({ favorite: true }));
+    assert.equal(wrongContentType, 415);
   } finally {
     child.kill("SIGTERM");
     await new Promise((resolve) => child.once("exit", resolve));

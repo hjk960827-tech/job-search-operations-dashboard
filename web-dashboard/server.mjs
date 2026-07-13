@@ -50,6 +50,11 @@ function packageQualityOptions() {
 initializeDatabase(dbPath, { mode: effectiveMode });
 const db = openDatabase(dbPath);
 
+// DNS rebinding uses an attacker-controlled name that resolves to 127.0.0.1,
+// so loopback binding alone does not protect the resume data behind this API.
+const allowedHosts = new Set([host, "127.0.0.1", "localhost", "[::1]"].map((name) => `${name.toLowerCase()}:${port}`));
+const allowedOrigins = new Set([...allowedHosts].map((value) => `http://${value}`));
+
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
@@ -84,6 +89,10 @@ function publicError(error) {
 }
 
 async function readJson(request) {
+  const contentType = String(request.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+  if (contentType !== "application/json") {
+    throw Object.assign(new Error("Content-Type must be application/json"), { statusCode: 415 });
+  }
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -139,6 +148,16 @@ function serveStatic(requestPath, response) {
 
 const server = http.createServer(async (request, response) => {
   try {
+    const hostHeader = String(request.headers.host || "").toLowerCase();
+    if (!allowedHosts.has(hostHeader)) {
+      sendError(response, 403, "Unrecognized Host header");
+      return;
+    }
+    const origin = String(request.headers.origin || "").toLowerCase();
+    if (origin && !allowedOrigins.has(origin)) {
+      sendError(response, 403, "Cross-origin requests are not allowed");
+      return;
+    }
     const url = new URL(request.url || "/", `http://${host}:${port}`);
     if (request.method === "GET" && url.pathname === "/api/health") {
       sendJson(response, 200, {
