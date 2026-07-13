@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { configStatus, loadConfig } from "../lib/config.mjs";
+import { configStatus, loadConfig, loadExampleConfig } from "../lib/config.mjs";
 import {
   getResume,
   importJob,
@@ -13,7 +13,13 @@ import {
   updateApplicationState,
 } from "../lib/database.mjs";
 import { databasePath, runtimeMode } from "../lib/paths.mjs";
-import { runtimeHost, runtimePort } from "../lib/runtime.mjs";
+import {
+  assertRuntimeSetup,
+  protectLocalRequest,
+  readJsonBody,
+  runtimeHost,
+  runtimePort,
+} from "../lib/runtime.mjs";
 import {
   approvePackage,
   createPackage,
@@ -25,16 +31,18 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(here, "public");
+const realPublicRoot = fs.realpathSync(publicRoot);
 const requestedMode = runtimeMode();
 const setup = configStatus();
-const effectiveMode = requestedMode === "personal" && setup.complete ? "personal" : "demo";
+const effectiveMode = assertRuntimeSetup(requestedMode, setup.complete);
 const onboardingRequired = !setup.complete;
 const dbPath = databasePath(effectiveMode);
 const host = runtimeHost();
 const port = runtimePort();
-const sourcesConfig = loadConfig("sources", { allowExample: effectiveMode === "demo" });
-const resumeConfig = loadConfig("resume", { allowExample: effectiveMode === "demo" });
-const searchConfig = loadConfig("search", { allowExample: effectiveMode === "demo" });
+const runtimeConfig = (name) => effectiveMode === "demo" ? loadExampleConfig(name) : loadConfig(name);
+const sourcesConfig = runtimeConfig("sources");
+const resumeConfig = runtimeConfig("resume");
+const searchConfig = runtimeConfig("search");
 const profileConfig = effectiveMode === "personal" ? loadConfig("profile") : null;
 
 function packageQualityOptions() {
@@ -45,6 +53,10 @@ function packageQualityOptions() {
     threshold: Number.isFinite(threshold) ? Math.max(0, Math.min(100, threshold)) : 80,
     maximumPages: Number.isInteger(maximumPages) ? Math.max(1, Math.min(10, maximumPages)) : 3,
   };
+}
+
+function dashboardJobs() {
+  return listJobs(db, sourcesConfig, packageQualityOptions());
 }
 
 initializeDatabase(dbPath, { mode: effectiveMode });
@@ -75,47 +87,62 @@ function sendError(response, status, message) {
 }
 
 function publicError(error) {
-  const status = Number(error?.statusCode || 500);
+  let status = Number(error?.statusCode || 500);
+  const message = String(error?.message || "");
+  if (!error?.statusCode) {
+    if (/database is locked|SQLITE_BUSY/i.test(message)) {
+      return { status: 409, message: "다른 작업이 저장 중입니다. 잠시 후 다시 시도해 주세요." };
+    }
+    if (message === "Job not found" || message === "Package not found") status = 404;
+    else if (
+      message === "Unsupported workflow status"
+      || message === "Only HTTP(S) job sources are allowed"
+      || message === "Score must be a number between 0 and 100"
+      || message.startsWith("Missing required field:")
+    ) status = 400;
+  }
   if (status >= 500) {
     console.error(error);
     return { status: 500, message: "요청 처리 중 내부 오류가 발생했습니다." };
   }
-  return { status, message: error?.message || "요청을 처리하지 못했습니다." };
-}
-
-async function readJson(request) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > 100_000) throw new Error("Request body is too large");
-    chunks.push(chunk);
-  }
-  if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  return { status, message: message || "요청을 처리하지 못했습니다." };
 }
 
 function dashboardPayload() {
+  const publicSetup = {
+    complete: setup.complete,
+    files: Object.fromEntries(Object.entries(setup.files).map(([name, value]) => [name, {
+      exists: value.exists,
+      complete: value.complete,
+    }])),
+  };
   return {
     product: "Job Search Operations Dashboard",
     requestedMode,
     mode: effectiveMode,
     onboardingRequired,
-    configStatus: setup,
+    configStatus: publicSetup,
     profile: {
       displayName: effectiveMode === "personal"
         ? String(profileConfig?.identity?.display_name || "")
         : "예시 사용자",
     },
-    jobs: listJobs(db, sourcesConfig),
+    jobs: dashboardJobs(),
     resume: getResume(db),
     sources: sourcesConfig.sources || {},
-    scoreReviewBelow: Number(searchConfig?.scoring?.review_below ?? 86),
+    scoreReviewBelow: Number(searchConfig?.scoring?.review_below ?? 70),
   };
 }
 
 function serveStatic(requestPath, response) {
-  const decoded = decodeURIComponent(requestPath === "/" ? "/index.html" : requestPath);
+  let decoded;
+  try {
+    decoded = decodeURIComponent(requestPath === "/" ? "/index.html" : requestPath);
+  } catch (error) {
+    if (!(error instanceof URIError)) throw error;
+    sendError(response, 400, "올바르지 않은 요청 경로입니다.");
+    return;
+  }
   const candidate = path.resolve(publicRoot, `.${decoded}`);
   const relative = path.relative(publicRoot, candidate);
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -126,9 +153,15 @@ function serveStatic(requestPath, response) {
     sendError(response, 404, "Not found");
     return;
   }
-  const contents = fs.readFileSync(candidate);
+  const realCandidate = fs.realpathSync(candidate);
+  const realRelative = path.relative(realPublicRoot, realCandidate);
+  if (realRelative === ".." || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) {
+    sendError(response, 403, "Forbidden path");
+    return;
+  }
+  const contents = fs.readFileSync(realCandidate);
   response.writeHead(200, {
-    "content-type": mimeTypes.get(path.extname(candidate)) || "application/octet-stream",
+    "content-type": mimeTypes.get(path.extname(realCandidate)) || "application/octet-stream",
     "content-length": contents.length,
     "cache-control": "no-cache",
     "x-content-type-options": "nosniff",
@@ -139,7 +172,14 @@ function serveStatic(requestPath, response) {
 
 const server = http.createServer(async (request, response) => {
   try {
-    const url = new URL(request.url || "/", `http://${host}:${port}`);
+    const requestPath = request.url || "/";
+    if (!requestPath.startsWith("/")) {
+      sendError(response, 400, "올바르지 않은 요청 경로입니다.");
+      return;
+    }
+    const baseHost = host.includes(":") ? `[${host}]` : host;
+    const url = new URL(requestPath, `http://${baseHost}:${port}`);
+    protectLocalRequest({ method: request.method, pathname: url.pathname, headers: request.headers, port, mode: effectiveMode });
     if (request.method === "GET" && url.pathname === "/api/health") {
       sendJson(response, 200, {
         ok: true,
@@ -157,8 +197,8 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "PATCH" && /^\/api\/jobs\/\d+\/state$/.test(url.pathname)) {
       const jobId = Number(url.pathname.split("/")[3]);
-      updateApplicationState(db, jobId, await readJson(request));
-      sendJson(response, 200, { ok: true, jobs: listJobs(db, sourcesConfig) });
+      updateApplicationState(db, jobId, await readJsonBody(request));
+      sendJson(response, 200, { ok: true, jobs: dashboardJobs() });
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/jobs") {
@@ -166,43 +206,54 @@ const server = http.createServer(async (request, response) => {
         sendError(response, 409, "Complete personal setup before importing real jobs");
         return;
       }
-      const jobId = importJob(db, await readJson(request));
-      sendJson(response, 201, { ok: true, jobId, jobs: listJobs(db, sourcesConfig) });
+      const jobId = importJob(db, await readJsonBody(request));
+      sendJson(response, 201, { ok: true, jobId, jobs: dashboardJobs() });
       return;
     }
     if (request.method === "PUT" && url.pathname === "/api/resume") {
-      const resume = saveResume(db, await readJson(request));
+      const resume = saveResume(db, await readJsonBody(request));
       sendJson(response, 200, { ok: true, resume });
       return;
     }
     if (request.method === "POST" && /^\/api\/jobs\/\d+\/package$/.test(url.pathname)) {
       const jobId = Number(url.pathname.split("/")[3]);
-      const packageValue = createPackage(db, jobId, packageQualityOptions());
-      sendJson(response, 201, { ok: true, package: publicPackage(packageValue), jobs: listJobs(db, sourcesConfig) });
+      const body = await readJsonBody(request);
+      if (body.refreshConfirmed !== undefined && typeof body.refreshConfirmed !== "boolean") {
+        throw Object.assign(new Error("refreshConfirmed must be true or false"), { statusCode: 400 });
+      }
+      const packageValue = createPackage(db, jobId, {
+        ...packageQualityOptions(),
+        refreshConfirmed: body.refreshConfirmed === true,
+      });
+      sendJson(response, 201, { ok: true, package: publicPackage(packageValue), jobs: dashboardJobs() });
       return;
     }
     if (request.method === "PUT" && /^\/api\/packages\/\d+$/.test(url.pathname)) {
       const packageId = Number(url.pathname.split("/")[3]);
-      const packageValue = updatePackage(db, packageId, await readJson(request), packageQualityOptions());
-      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: listJobs(db, sourcesConfig) });
+      const packageValue = updatePackage(db, packageId, await readJsonBody(request), packageQualityOptions());
+      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: dashboardJobs() });
       return;
     }
     if (request.method === "POST" && /^\/api\/packages\/\d+\/approve$/.test(url.pathname)) {
       const packageId = Number(url.pathname.split("/")[3]);
-      const packageValue = await approvePackage(db, packageId, { ...await readJson(request), ...packageQualityOptions() });
-      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: listJobs(db, sourcesConfig) });
+      const packageValue = await approvePackage(db, packageId, { ...await readJsonBody(request), ...packageQualityOptions() });
+      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: dashboardJobs() });
       return;
     }
     if (request.method === "POST" && /^\/api\/packages\/\d+\/prepare$/.test(url.pathname)) {
       const packageId = Number(url.pathname.split("/")[3]);
-      const packageValue = prepareSubmission(db, packageId, await readJson(request));
-      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: listJobs(db, sourcesConfig) });
+      const packageValue = prepareSubmission(db, packageId, {
+        ...await readJsonBody(request),
+        ...packageQualityOptions(),
+      });
+      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: dashboardJobs() });
       return;
     }
     if (request.method === "POST" && /^\/api\/packages\/\d+\/submitted$/.test(url.pathname)) {
       const packageId = Number(url.pathname.split("/")[3]);
+      await readJsonBody(request);
       const packageValue = recordSubmitted(db, packageId);
-      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: listJobs(db, sourcesConfig) });
+      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: dashboardJobs() });
       return;
     }
     if (url.pathname.startsWith("/api/")) {

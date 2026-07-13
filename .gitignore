@@ -1,8 +1,6 @@
 # Local configuration
-config/profile.yml
-config/search.yml
-config/sources.yml
-config/resume.yml
+config/*.yml
+!config/*.example.yml
 .env
 .env.*
 !.env.example
@@ -24,6 +22,18 @@ tmp/
 
 # Application packages and private documents
 cv.md
+cv.json
+resume.md
+resume.json
+portfolio.md
+portfolio.json
+profile.json
+applications.json
+!examples/demo/profile.json
+!examples/demo/applications.json
+application-export*
+job-export*
+claim-bank*
 resume/
 resumes/
 portfolio/

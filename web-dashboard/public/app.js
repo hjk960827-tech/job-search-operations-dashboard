@@ -21,13 +21,36 @@ const statusLabels = {
 const packageStateLabels = {
   quality_hold: "품질 보완 필요",
   approval_pending: "승인 대기",
-  revision_requested: "수정 요청",
-  approval_hold: "승인 보류",
   approved: "승인 완료",
   submit_ready: "제출 준비 완료",
   submitted: "제출 완료",
-  archived: "보관",
 };
+
+const sourceStatusLabels = {
+  active: "게시 중",
+  closed: "마감",
+  unknown: "확인 필요",
+};
+
+function sourceConfidenceLabel(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return "확인 필요";
+  if (score >= 80) return "높음";
+  if (score >= 50) return "보통";
+  return "낮음";
+}
+
+function isReadOnlyDemo() {
+  return state.data?.mode !== "personal";
+}
+
+function protectDemoControl(control) {
+  if (isReadOnlyDemo()) {
+    control.disabled = true;
+    control.title = "예시 모드는 읽기 전용입니다. 개인 설정을 완료한 뒤 사용할 수 있습니다.";
+  }
+  return control;
+}
 
 function showToast(message, error = false) {
   const toast = $("#toast");
@@ -90,7 +113,9 @@ function filteredJobs() {
     if (state.filters.track && job.track !== state.filters.track) return false;
     if (state.filters.platform && !job.sources.some((source) => source.platform === state.filters.platform)) return false;
     if (state.filters.status && job.application.workflowStatus !== state.filters.status) return false;
-    const archived = job.status === "closed" || ["skipped", "rejected"].includes(job.application.workflowStatus);
+    const lifecycleStatus = String(job.status || "unknown").trim().toLowerCase();
+    const archived = ["closed", "expired", "ended"].includes(lifecycleStatus)
+      || ["skipped", "rejected"].includes(job.application.workflowStatus);
     if (state.filters.lifecycle === "active" && archived) return false;
     if (state.filters.lifecycle === "archive" && !archived) return false;
     if (state.filters.favorite && !job.application.favorite) return false;
@@ -120,7 +145,7 @@ function createJobCard(job) {
   body.append(company, title, meta);
   const score = document.createElement("span");
   score.className = `job-score${job.score === null ? " empty" : ""}`;
-  const reviewBelow = Number(state.data.scoreReviewBelow ?? 86);
+  const reviewBelow = Number(state.data.scoreReviewBelow ?? 70);
   if (job.score !== null && Number(job.score) < reviewBelow) {
     score.classList.add("caution");
     score.title = "적합도 주의";
@@ -180,7 +205,7 @@ function renderDetail(jobId) {
   summary.className = "detail-summary";
   summary.textContent = job.summary || "공고 요약이 아직 없습니다.";
   detail.append(company, title, meta, summary);
-  if (job.score !== null && Number(job.score) < Number(state.data.scoreReviewBelow ?? 86)) {
+  if (job.score !== null && Number(job.score) < Number(state.data.scoreReviewBelow ?? 70)) {
     const caution = document.createElement("p");
     caution.className = "package-state hold";
     caution.textContent = "적합도 주의 · 사용자 기준 점수 미만";
@@ -201,6 +226,7 @@ function renderDetail(jobId) {
     favorite.className = "secondary-button";
     favorite.textContent = job.application.favorite ? "관심 해제" : "관심 추가";
     favorite.addEventListener("click", () => saveState(job, { favorite: !job.application.favorite }));
+    protectDemoControl(favorite);
     actions.append(link, favorite);
     detail.append(actions);
   }
@@ -216,7 +242,7 @@ function renderDetail(jobId) {
     const label = document.createElement("strong");
     label.textContent = sourceLabel(source.platform);
     const status = document.createElement("span");
-    status.textContent = `상태 ${source.status} · 신뢰도 ${source.confidence}`;
+    status.textContent = `${sourceStatusLabels[source.status] || "확인 필요"} · 상태 확인 신뢰도 ${sourceConfidenceLabel(source.confidence)}`;
     info.append(label, document.createElement("br"), status);
     const link = document.createElement("a");
     link.href = source.url;
@@ -242,6 +268,7 @@ function renderDetail(jobId) {
     statusSelect.append(option);
   }
   statusSelect.value = job.application.workflowStatus;
+  protectDemoControl(statusSelect);
   statusLabel.append(statusCaption, statusSelect);
   const noteLabel = document.createElement("label");
   const noteCaption = document.createElement("span");
@@ -250,12 +277,14 @@ function renderDetail(jobId) {
   note.rows = 4;
   note.maxLength = 2000;
   note.value = job.application.note;
+  protectDemoControl(note);
   noteLabel.append(noteCaption, note);
   const save = document.createElement("button");
   save.type = "button";
   save.className = "primary-button";
   save.textContent = "상태 저장";
   save.addEventListener("click", () => saveState(job, { workflowStatus: statusSelect.value, note: note.value }));
+  protectDemoControl(save);
   statePanel.append(statusLabel, noteLabel, save);
   detail.append(statePanel);
   detail.append(renderPackagePanel(job));
@@ -283,7 +312,7 @@ function packageField(section) {
   const minimum = section.kind === "list"
     ? `최소 ${section.minItems || 1}개, 각 ${section.minItemLength || 1}자`
     : `최소 ${section.minLength || 1}자`;
-  reason.textContent = `${section.reason || "등록 이력서에서 선택된 맞춤 수정 항목입니다."} · ${minimum}`;
+  reason.textContent = `${section.reason || "등록 이력서에서 선택된 공고별 수정 항목입니다."} · ${minimum}`;
   label.append(heading, input, reason);
   return label;
 }
@@ -300,7 +329,7 @@ function packageAction(label, className, handler) {
   button.className = className;
   button.textContent = label;
   button.addEventListener("click", handler);
-  return button;
+  return protectDemoControl(button);
 }
 
 function renderPackagePanel(job) {
@@ -309,18 +338,18 @@ function renderPackagePanel(job) {
   const heading = document.createElement("div");
   heading.className = "package-heading";
   const title = document.createElement("h4");
-  title.textContent = "맞춤 지원 문서";
+  title.textContent = "공고별 지원 문서 작업본";
   heading.append(title);
   panel.append(heading);
 
   if (!job.package) {
     const copy = document.createElement("p");
-    copy.textContent = "등록한 기본 이력서 중 이 공고와 관련 있고 수정이 허용된 항목만 골라 맞춤 문안을 만듭니다. 실제 제출 전에는 반드시 직접 검토해야 합니다.";
-    const create = packageAction("맞춤 문안 시작", "primary-button", async () => {
+    copy.textContent = "기본 이력서에서 공고에 연결된 항목을 불러와 직접 수정하는 작업본입니다. 새 경력을 자동으로 작성하거나 직무 적합성을 판정하지 않습니다.";
+    const create = packageAction("공고별 작업본 만들기", "primary-button", async () => {
       try {
         const payload = await request(`/api/jobs/${job.id}/package`, { method: "POST", body: "{}" });
         applyJobs(payload, job.id);
-        showToast("맞춤 문안을 만들었습니다.");
+        showToast("공고별 작업본을 만들었습니다.");
       } catch (error) { showToast(error.message, true); }
     });
     panel.append(copy, create);
@@ -328,6 +357,8 @@ function renderPackagePanel(job) {
   }
 
   const packageValue = job.package;
+  const packageLocked = packageValue.refreshAvailable === false;
+  title.textContent = `공고별 지원 문서 작업본 · v${packageValue.version}`;
   const badge = document.createElement("span");
   badge.className = `package-state ${packageValue.quality.status === "passed" ? "ready" : "hold"}`;
   badge.textContent = packageStateLabels[packageValue.state] || packageValue.state;
@@ -335,7 +366,7 @@ function renderPackagePanel(job) {
 
   const quality = document.createElement("p");
   quality.className = "package-quality";
-  quality.textContent = `품질 점수 ${Math.round(packageValue.quality.score)}점 · ${packageValue.quality.status === "passed" ? "기준 통과" : "보완 필요"}`;
+  quality.textContent = `작성 완성도 ${Math.round(packageValue.quality.score)}점 · ${packageValue.quality.status === "passed" ? "필수 작성 기준 통과" : "필수 항목 보완 필요"}`;
   panel.append(quality);
   if (packageValue.quality.findings?.length) {
     const findings = document.createElement("ul");
@@ -348,7 +379,41 @@ function renderPackagePanel(job) {
     panel.append(findings);
   }
 
-  const editable = ["quality_hold", "approval_pending", "revision_requested", "approval_hold", "approved"].includes(packageValue.state);
+  if (packageValue.refreshRequired) {
+    const refreshNotice = document.createElement("div");
+    refreshNotice.className = "package-frozen";
+    const refreshTitle = document.createElement("strong");
+    refreshTitle.textContent = "기준 정보가 변경되어 이 문서를 그대로 제출할 수 없습니다.";
+    const refreshReasons = document.createElement("p");
+    refreshReasons.textContent = (packageValue.refreshReasons || [])
+      .map((item) => typeof item === "string" ? item : item?.message || item?.key || "")
+      .filter(Boolean)
+      .join(" · ")
+      || "기본 이력서, 공고 정보 또는 작성 기준이 변경되었습니다.";
+    refreshNotice.append(refreshTitle, refreshReasons);
+    if (packageValue.refreshAvailable) {
+      refreshNotice.append(packageAction("변경사항을 반영해 새 버전 만들기", "primary-button", async () => {
+        try {
+          const payload = await request(`/api/jobs/${job.id}/package`, {
+            method: "POST",
+            body: JSON.stringify({ refreshConfirmed: true }),
+          });
+          applyJobs(payload, job.id);
+          showToast("현재 기준으로 새 문서 버전을 만들었습니다.");
+        } catch (error) { showToast(error.message, true); }
+      }));
+    }
+    panel.append(refreshNotice);
+  } else if (packageLocked) {
+    const lockedNotice = document.createElement("p");
+    lockedNotice.className = "package-frozen";
+    lockedNotice.textContent = "마감·제외·종료된 공고의 지원 문서는 수정하거나 제출 단계로 이동할 수 없습니다.";
+    panel.append(lockedNotice);
+  }
+
+  const editable = !packageValue.refreshRequired
+    && !packageLocked
+    && ["quality_hold", "approval_pending", "approved"].includes(packageValue.state);
   if (editable) {
     const form = document.createElement("div");
     form.className = "package-form";
@@ -356,7 +421,7 @@ function renderPackagePanel(job) {
       const facts = document.createElement("div");
       facts.className = "protected-facts";
       const factsTitle = document.createElement("strong");
-      factsTitle.textContent = "사실 보호 항목 · 맞춤 문안에서 수정되지 않습니다";
+      factsTitle.textContent = "사실 보호 항목 · 공고별 문서에서 수정되지 않습니다";
       facts.append(factsTitle);
       for (const fact of packageValue.content.protectedFacts) {
         const item = document.createElement("span");
@@ -369,7 +434,7 @@ function renderPackagePanel(job) {
     if (!packageValue.content.sections?.length) {
       const empty = document.createElement("p");
       empty.className = "package-frozen";
-      empty.textContent = "기본 이력서에서 내용을 입력하고 맞춤 수정 허용 항목을 선택해 주세요.";
+      empty.textContent = "기본 이력서에서 내용을 입력하고 공고별 수정 허용 항목을 선택해 주세요.";
       form.append(empty);
     }
     const actions = document.createElement("div");
@@ -391,11 +456,14 @@ function renderPackagePanel(job) {
       } catch (error) { showToast(error.message, true); }
     }));
     if (packageValue.state === "approval_pending") {
-      actions.append(packageAction("승인하고 PDF 생성", "primary-button", async () => {
+      actions.append(packageAction("문안 확인 후 PDF 생성·승인", "primary-button", async () => {
         try {
-          const payload = await request(`/api/packages/${packageValue.id}/approve`, { method: "POST", body: "{}" });
+          const payload = await request(`/api/packages/${packageValue.id}/approve`, {
+            method: "POST",
+            body: JSON.stringify({ expectedChecksum: packageValue.checksum }),
+          });
           applyJobs(payload, job.id);
-          showToast("검증된 PDF를 생성하고 문안을 승인했습니다.");
+          showToast("현재 문안으로 PDF를 생성하고 승인했습니다.");
         } catch (error) { showToast(error.message, true); }
       }));
     }
@@ -406,7 +474,7 @@ function renderPackagePanel(job) {
   if (packageValue.pdf?.available) {
     const pdf = document.createElement("p");
     pdf.className = "package-pdf";
-    pdf.textContent = `${packageValue.pdf.fileName} · ${packageValue.pdf.pages}페이지 · 체크섬 ${packageValue.pdf.checksum.slice(0, 12)}`;
+    pdf.textContent = `PDF 작업본 · ${packageValue.pdf.pages}페이지 · 승인 내용 고정됨`;
     panel.append(pdf);
   }
   if (packageValue.applicationAnswers?.available) {
@@ -419,7 +487,9 @@ function renderPackagePanel(job) {
     const manualSubmissionReady = Boolean(
       packageValue.pdf?.available
       && packageValue.approvedChecksum
-      && packageValue.approvedChecksum === packageValue.checksum,
+      && packageValue.approvedChecksum === packageValue.checksum
+      && !packageValue.refreshRequired
+      && !packageLocked,
     );
     const prepare = packageAction("수기 제출 준비", "primary-button", async () => {
       try {
@@ -431,13 +501,15 @@ function renderPackagePanel(job) {
         showToast("수기 제출할 PDF를 확정했습니다. 채용 플랫폼에서 직접 지원해 주세요.");
       } catch (error) { showToast(error.message, true); }
     });
-    prepare.disabled = !manualSubmissionReady;
-    prepare.title = manualSubmissionReady
-      ? "승인된 PDF를 확정하고 수기 제출 단계로 이동합니다."
-      : "문안 승인과 PDF 준비 상태를 먼저 확인해 주세요.";
+    prepare.disabled = isReadOnlyDemo() || !manualSubmissionReady;
+    prepare.title = isReadOnlyDemo()
+      ? "예시 모드는 읽기 전용입니다."
+      : manualSubmissionReady
+        ? "승인된 PDF를 확정하고 수기 제출 단계로 이동합니다."
+        : "문안 승인과 PDF 준비 상태를 먼저 확인해 주세요.";
     panel.append(prepare);
   }
-  if (packageValue.state === "submit_ready") {
+  if (packageValue.state === "submit_ready" && !packageLocked) {
     panel.append(packageAction("제출 완료 기록", "primary-button", async () => {
       try {
         const payload = await request(`/api/packages/${packageValue.id}/submitted`, { method: "POST", body: "{}" });
@@ -488,8 +560,11 @@ function renderResume() {
   $("#resumeCareerDirection").value = resume.careerDirection || "";
   const editable = new Set(resume.editableSections || []);
   $$('[data-editable-section]').forEach((input) => { input.checked = editable.has(input.dataset.editableSection); });
-  $("#resumeFilename").value = resume.filenamePattern || "{name}_resume_{company}.pdf";
   $("#resumeSavedAt").textContent = resume.updatedAt ? `마지막 저장 ${formatDateTime(resume.updatedAt)}` : "";
+  for (const control of $("#resumeForm").querySelectorAll("input, textarea, select, button")) {
+    control.disabled = isReadOnlyDemo() || control.id === "resumeYearsExperience" && resume.careerType !== "experienced";
+    if (isReadOnlyDemo()) control.title = "예시 모드는 읽기 전용입니다.";
+  }
 }
 
 function renderSettings() {
@@ -515,7 +590,7 @@ function renderSettings() {
     const name = document.createElement("strong");
     name.textContent = item.label || key;
     const status = document.createElement("span");
-    status.textContent = `${item.collect ? "수집" : "수집 제외"} · ${item.display ? "표시" : "숨김"} · 우선순위 ${item.priority}`;
+    status.textContent = `${item.collect ? "수집 대상" : "수집 제외"} · ${item.display ? "화면 표시" : "화면 숨김"} · 대표 링크 순서 ${item.priority}`;
     row.append(name, status);
     sources.append(row);
   }
@@ -537,14 +612,31 @@ function bindEvents() {
   $("#searchInput").addEventListener("input", (event) => { state.filters.search = event.target.value; renderJobs(); });
   $("#trackFilter").addEventListener("change", (event) => { state.filters.track = event.target.value; renderJobs(); });
   $("#platformFilter").addEventListener("change", (event) => { state.filters.platform = event.target.value; renderJobs(); });
-  $("#statusFilter").addEventListener("change", (event) => { state.filters.status = event.target.value; renderJobs(); });
-  $("#lifecycleFilter").addEventListener("change", (event) => { state.filters.lifecycle = event.target.value; renderJobs(); });
+  $("#statusFilter").addEventListener("change", (event) => {
+    state.filters.status = event.target.value;
+    if (["skipped", "rejected"].includes(state.filters.status) && state.filters.lifecycle === "active") {
+      state.filters.lifecycle = "all";
+      $("#lifecycleFilter").value = "all";
+      showToast("종료·제외 상태를 볼 수 있도록 공고 보기를 전체로 바꿨습니다.");
+    }
+    renderJobs();
+  });
+  $("#lifecycleFilter").addEventListener("change", (event) => {
+    state.filters.lifecycle = event.target.value;
+    if (state.filters.lifecycle === "active" && ["skipped", "rejected"].includes(state.filters.status)) {
+      state.filters.status = "";
+      $("#statusFilter").value = "";
+      showToast("활성 공고를 볼 수 있도록 지원 상태를 전체로 바꿨습니다.");
+    }
+    renderJobs();
+  });
   $("#favoriteFilter").addEventListener("change", (event) => { state.filters.favorite = event.target.checked; renderJobs(); });
   $("#resumeCareerType").addEventListener("change", (event) => {
     $("#resumeYearsExperience").disabled = event.target.value !== "experienced";
   });
   $("#resumeForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (isReadOnlyDemo()) return;
     const lines = (value) => value.split("\n").map((item) => item.trim()).filter(Boolean);
     try {
       const payload = await request("/api/resume", {
@@ -567,7 +659,6 @@ function bindEvents() {
           collaborationScope: $("#resumeCollaborationScope").value,
           careerDirection: $("#resumeCareerDirection").value,
           editableSections: $$('[data-editable-section]:checked').map((input) => input.dataset.editableSection),
-          filenamePattern: $("#resumeFilename").value,
         }),
       });
       state.data.resume = payload.resume;

@@ -2,10 +2,23 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function prepareProject() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "demo-server-"));
+  for (const name of ["db", "lib", "web-dashboard", "config", "examples"]) {
+    fs.cpSync(path.join(root, name), path.join(directory, name), { recursive: true });
+  }
+  for (const name of ["profile", "search", "sources", "resume"]) {
+    fs.rmSync(path.join(directory, "config", `${name}.yml`), { force: true });
+  }
+  fs.symlinkSync(path.join(root, "node_modules"), path.join(directory, "node_modules"), "dir");
+  return directory;
+}
 
 function waitForServer(child) {
   return new Promise((resolve, reject) => {
@@ -23,12 +36,16 @@ function waitForServer(child) {
   });
 }
 
-test("server exposes demo data, blocks real imports, and prevents static path escape", async () => {
+test("server exposes demo data, blocks every mutation, and prevents local request bypasses", async () => {
+  const directory = prepareProject();
   const port = 18000 + (process.pid % 1000);
   const dbName = `server-test-${process.pid}.sqlite`;
-  const dbPath = path.join(root, "data", dbName);
+  const outsideFile = path.join(directory, `server-outside-${process.pid}.txt`);
+  const publicLink = path.join(directory, "web-dashboard", "public", `.server-outside-${process.pid}.txt`);
+  fs.writeFileSync(outsideFile, "must not be served");
+  fs.symlinkSync(outsideFile, publicLink);
   const child = spawn(process.execPath, ["web-dashboard/server.mjs"], {
-    cwd: root,
+    cwd: directory,
     env: { ...process.env, APP_MODE: "demo", PORT: String(port), JOB_SEARCH_DB_PATH: `data/${dbName}` },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -43,18 +60,45 @@ test("server exposes demo data, blocks real imports, and prevents static path es
     assert.equal(dashboard.jobs.length, 3);
     assert.equal(dashboard.onboardingRequired, true);
 
-    const blockedImport = await fetch(`http://127.0.0.1:${port}/api/jobs`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jobKey: "blocked", companyName: "Example", title: "Role" }),
+    const mutations = [
+      ["PATCH", "/api/jobs/1/state"],
+      ["POST", "/api/jobs"],
+      ["PUT", "/api/resume"],
+      ["POST", "/api/jobs/1/package"],
+      ["PUT", "/api/packages/1"],
+      ["POST", "/api/packages/1/approve"],
+      ["POST", "/api/packages/1/prepare"],
+      ["POST", "/api/packages/1/submitted"],
+      ["DELETE", "/api/future-write-route"],
+    ];
+    for (const [method, requestPath] of mutations) {
+      const blocked = await fetch(`http://127.0.0.1:${port}${requestPath}`, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      assert.equal(blocked.status, 409, `${method} ${requestPath} must be read-only in demo mode`);
+    }
+    const unchangedDashboard = await fetch(`http://127.0.0.1:${port}/api/dashboard`).then((response) => response.json());
+    assert.deepEqual(unchangedDashboard.jobs, dashboard.jobs);
+    assert.deepEqual(unchangedDashboard.resume, dashboard.resume);
+
+    const foreignOrigin = await fetch(`http://127.0.0.1:${port}/api/dashboard`, {
+      headers: { origin: "https://evil.example" },
     });
-    assert.equal(blockedImport.status, 409);
+    assert.equal(foreignOrigin.status, 403);
 
     const escaped = await fetch(`http://127.0.0.1:${port}/..%2fpackage.json`);
     assert.equal(escaped.status, 403);
+    const malformedEncoding = await fetch(`http://127.0.0.1:${port}/%E0%A4%A`);
+    assert.equal(malformedEncoding.status, 400);
+    const symlinkEscape = await fetch(`http://127.0.0.1:${port}/${path.basename(publicLink)}`);
+    assert.equal(symlinkEscape.status, 403);
   } finally {
-    child.kill("SIGTERM");
-    await new Promise((resolve) => child.once("exit", resolve));
-    for (const suffix of ["", "-shm", "-wal"]) fs.rmSync(`${dbPath}${suffix}`, { force: true });
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });

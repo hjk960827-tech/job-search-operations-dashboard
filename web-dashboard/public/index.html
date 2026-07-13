@@ -22,7 +22,7 @@
 
       <div id="exampleBanner" class="example-banner" hidden>
         <strong>예시 데이터 사용 중</strong>
-        <span>화면에 표시된 인물·회사·공고는 실제 정보가 아닙니다. 개인 설정을 마치면 별도 DB로 전환됩니다.</span>
+        <span>화면에 표시된 인물·회사·공고는 실제 정보가 아니며 예시 모드는 읽기 전용입니다. 개인 설정을 마치면 별도 DB로 전환됩니다.</span>
       </div>
 
       <nav class="tabs" aria-label="주요 화면">
@@ -98,6 +98,7 @@
             <div>
               <p class="section-kicker">RESUME BASELINE</p>
               <h2>이력서 작성 기준</h2>
+              <p class="subtle">현재 공고별 문서에 적용되는 기본 이력서는 1개입니다.</p>
             </div>
             <span id="resumeSavedAt" class="subtle"></span>
           </div>
@@ -174,8 +175,8 @@
               </label>
             </div>
             <fieldset class="editable-sections">
-              <legend>공고별 맞춤 수정 허용 항목</legend>
-              <p>체크한 항목만 공고별 맞춤 문안에서 수정할 수 있습니다. 학력·경력 구분·자격 정보는 사실 보호 항목으로 잠깁니다.</p>
+              <legend>공고별 수정 허용 항목</legend>
+              <p>체크한 항목만 공고별 지원 문서 작업본에서 수정할 수 있습니다. 학력·경력 구분·자격 정보는 사실 보호 항목으로 잠깁니다.</p>
               <div class="checkbox-grid">
                 <label><input type="checkbox" data-editable-section="headline"> 헤드라인</label>
                 <label><input type="checkbox" data-editable-section="summary"> 경력 요약</label>
@@ -188,10 +189,6 @@
                 <label><input type="checkbox" data-editable-section="career_direction"> 직무 관점 / 일하는 방식</label>
               </div>
             </fieldset>
-            <label>
-              <span>파일명 규칙</span>
-              <input id="resumeFilename" maxlength="160" placeholder="{name}_resume_{company}.pdf">
-            </label>
             <div class="form-actions">
               <p>근거가 없는 수치나 경력은 자동으로 추가하지 않습니다.</p>
               <button class="primary-button" type="submit">이력서 기준 저장</button>

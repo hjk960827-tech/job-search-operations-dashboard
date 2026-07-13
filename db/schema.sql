@@ -68,7 +68,6 @@ CREATE TABLE IF NOT EXISTS resume_profile (
   collaboration_scope TEXT NOT NULL DEFAULT '',
   career_direction TEXT NOT NULL DEFAULT '',
   editable_sections_json TEXT NOT NULL DEFAULT '["headline","summary","skills","experience_highlights","achievement_evidence","representative_experience","direct_scope","collaboration_scope","career_direction"]',
-  filename_pattern TEXT NOT NULL DEFAULT '{name}_resume_{company}.pdf',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -84,9 +83,14 @@ CREATE TABLE IF NOT EXISTS application_packages (
   job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   version INTEGER NOT NULL DEFAULT 1,
   state TEXT NOT NULL DEFAULT 'quality_hold'
-    CHECK(state IN ('quality_hold', 'approval_pending', 'revision_requested', 'approval_hold', 'approved', 'submit_ready', 'submitted', 'archived')),
+    CHECK(state IN ('quality_hold', 'approval_pending', 'approved', 'submit_ready', 'submitted')),
   content_json TEXT NOT NULL DEFAULT '{}',
   content_checksum TEXT NOT NULL,
+  base_resume_fingerprint TEXT NOT NULL DEFAULT '',
+  job_input_fingerprint TEXT NOT NULL DEFAULT '',
+  quality_rules_fingerprint TEXT NOT NULL DEFAULT '',
+  quality_rules_json TEXT NOT NULL DEFAULT '{}',
+  supersedes_package_id INTEGER REFERENCES application_packages(id) ON DELETE SET NULL,
   quality_status TEXT NOT NULL DEFAULT 'review',
   quality_score REAL NOT NULL DEFAULT 0,
   quality_findings_json TEXT NOT NULL DEFAULT '[]',

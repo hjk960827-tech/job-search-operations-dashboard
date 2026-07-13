@@ -22,6 +22,5 @@
   "editableSections": [
     "headline", "summary", "skills", "experience_highlights", "achievement_evidence",
     "representative_experience", "direct_scope", "collaboration_scope", "career_direction"
-  ],
-  "filenamePattern": "{name}_resume_{company}.pdf"
+  ]
 }

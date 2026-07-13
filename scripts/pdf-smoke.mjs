@@ -26,7 +26,7 @@ try {
     experienceHighlights: ["업무 기준과 담당자를 명확히 정리했습니다.", "완료 결과를 검토하고 개선 항목을 기록했습니다."],
   });
   packageValue = createPackage(db, jobId);
-  packageValue = await approvePackage(db, packageValue.id);
+  packageValue = await approvePackage(db, packageValue.id, { expectedChecksum: packageValue.checksum });
   if (packageValue.state !== "approved" || !packageValue.artifacts.pdfPath || packageValue.artifacts.pdfPages < 1) {
     throw new Error("Chromium PDF approval smoke test did not produce a verified artifact");
   }

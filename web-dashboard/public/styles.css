@@ -135,6 +135,7 @@ code { padding: 3px 6px; border-radius: 6px; background: var(--surface-soft); co
 .package-state.ready { background: #dcefe6; color: #1f674c; }
 .package-state.hold { background: #f5e7d2; color: #85571d; }
 .package-quality, .package-pdf, .package-frozen { color: var(--muted); font-size: 13px; }
+.package-frozen p { margin: 6px 0 10px; }
 .package-findings { margin: 8px 0 16px; color: #85571d; font-size: 13px; }
 .package-form { display: grid; gap: 13px; margin-top: 16px; }
 .package-field { display: grid; gap: 6px; }

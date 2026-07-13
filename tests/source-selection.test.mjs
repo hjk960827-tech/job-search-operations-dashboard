@@ -28,6 +28,14 @@ test("closed direct source is excluded when an active source exists", () => {
   assert.equal(result.platform, "wanted");
 });
 
+test("closed aliases are compared case-insensitively", () => {
+  const result = selectPrimarySource([
+    { platform: "direct", status: "EXPIRED", confidence: 100, checkedAt: "2026-02-01" },
+    { platform: "wanted", status: "active", confidence: 80, checkedAt: "2026-01-01" },
+  ], config);
+  assert.equal(result.platform, "wanted");
+});
+
 test("hidden sources do not participate", () => {
   const ranked = rankSources([
     { platform: "hidden", status: "active", confidence: 100 },

@@ -13,6 +13,8 @@ import {
   approvePackage,
   buildPackageContent,
   createPackage,
+  evaluatePackageQuality,
+  getLatestPackageForJob,
   prepareSubmission,
   recordSubmitted,
   updatePackage,
@@ -124,22 +126,106 @@ test("database failure restores files and removes incomplete revision snapshot",
   }
 });
 
+test("package update CAS failure rolls back revision rows, snapshots, and installed artifacts", () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    const markdownBefore = fs.readFileSync(packageValue.artifacts.markdownPath, "utf8");
+    const jsonBefore = fs.readFileSync(packageValue.artifacts.contentJsonPath, "utf8");
+    assert.throws(() => updatePackage(
+      value.db,
+      packageValue.id,
+      { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum },
+      {
+        beforeCommit: () => {
+          value.db.prepare("UPDATE application_packages SET content_checksum = 'concurrent-writer' WHERE id = ?")
+            .run(packageValue.id);
+        },
+      },
+    ), (error) => error.statusCode === 409 && /changed during save/.test(error.message));
+    const stored = value.db.prepare("SELECT content_checksum, state FROM application_packages WHERE id = ?").get(packageValue.id);
+    assert.equal(stored.content_checksum, packageValue.checksum);
+    assert.equal(stored.state, packageValue.state);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_revisions WHERE package_id = ?").get(packageValue.id).count, 0);
+    assert.equal(fs.readFileSync(packageValue.artifacts.markdownPath, "utf8"), markdownBefore);
+    assert.equal(fs.readFileSync(packageValue.artifacts.contentJsonPath, "utf8"), jsonBefore);
+    assert.equal(fs.existsSync(path.join(packageValue.artifacts.directory, ".revisions")), false);
+    assert.equal(fs.readdirSync(packageValue.artifacts.directory).some((name) => name.includes(".tmp-") || name.includes(".previous-")), false);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("package creation holds the writer lock before installing shared version artifacts", () => {
+  const value = fixture();
+  const secondDb = openDatabase(path.join(value.directory, "test.sqlite"));
+  let packageValue;
+  try {
+    secondDb.exec("PRAGMA busy_timeout = 1");
+    let competingError;
+    packageValue = createPackage(value.db, value.jobId, {
+      beforeInsert: () => {
+        try {
+          createPackage(secondDb, value.jobId);
+        } catch (error) {
+          competingError = error;
+        }
+      },
+    });
+    assert.match(String(competingError?.message || ""), /locked/i);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM application_packages WHERE job_id = ?").get(value.jobId).count, 1);
+    assert.equal(secondDb.prepare("SELECT COUNT(*) AS count FROM application_packages WHERE job_id = ?").get(value.jobId).count, 1);
+    assert.equal(fs.existsSync(packageValue.artifacts.contentJsonPath), true);
+    assert.equal(fs.readdirSync(packageValue.artifacts.directory).some((name) => name.includes(".tmp-") || name.includes(".previous-")), false);
+  } finally {
+    secondDb.close();
+    value.cleanup(packageValue);
+  }
+});
+
 test("approval rejects four pages, accepts three pages, and rolls back on database failure", async () => {
   const value = fixture();
   let packageValue;
   try {
     packageValue = createPackage(value.db, value.jobId);
     let updated = updatePackage(value.db, packageValue.id, { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum });
-    await assert.rejects(() => approvePackage(value.db, updated.id, { renderer: fakePdf(4) }), /must contain 1-3 pages/);
+    await assert.rejects(() => approvePackage(value.db, updated.id, { expectedChecksum: updated.checksum, renderer: fakePdf(4) }), /must contain 1-3 pages/);
     assert.equal(fs.existsSync(path.join(updated.artifacts.directory, "resume.pdf")), false);
     await assert.rejects(() => approvePackage(value.db, updated.id, {
+      expectedChecksum: updated.checksum,
       renderer: fakePdf(3),
       beforeCommit: () => { throw new Error("forced approval failure"); },
     }), /forced approval failure/);
     assert.equal(fs.existsSync(path.join(updated.artifacts.directory, "resume.pdf")), false);
-    updated = await approvePackage(value.db, updated.id, { renderer: fakePdf(3) });
+    updated = await approvePackage(value.db, updated.id, { expectedChecksum: updated.checksum, renderer: fakePdf(3) });
     assert.equal(updated.state, "approved");
     assert.equal(updated.artifacts.pdfPages, 3);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("approval restores an existing PDF when staged installation fails after backup rename", async () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    const updated = updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue), expectedChecksum: packageValue.checksum,
+    });
+    const pdfPath = path.join(updated.artifacts.directory, "resume.pdf");
+    const previousPdf = "%PDF-1.7\n1 0 obj\n<< /Type /Page >>\nendobj\n% previous artifact\n%%EOF\n";
+    fs.writeFileSync(pdfPath, previousPdf, { encoding: "utf8", mode: 0o600 });
+    await assert.rejects(() => approvePackage(value.db, updated.id, {
+      expectedChecksum: updated.checksum,
+      renderer: fakePdf(1),
+      beforePdfInstall: ({ stagedPath }) => fs.rmSync(stagedPath, { force: true }),
+    }), /ENOENT|no such file/i);
+    assert.equal(fs.readFileSync(pdfPath, "utf8"), previousPdf);
+    assert.equal(value.db.prepare("SELECT state FROM application_packages WHERE id = ?").get(updated.id).state, "approval_pending");
+    assert.equal(fs.readdirSync(updated.artifacts.directory)
+      .some((name) => name.includes(".staged-") || name.includes(".previous-") || name.includes(".approval-source-")), false);
   } finally {
     value.cleanup(packageValue);
   }
@@ -151,7 +237,7 @@ test("editing an approved package archives its PDF and invalidates approval", as
   try {
     packageValue = createPackage(value.db, value.jobId);
     let updated = updatePackage(value.db, packageValue.id, { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum });
-    updated = await approvePackage(value.db, updated.id, { renderer: fakePdf(1) });
+    updated = await approvePackage(value.db, updated.id, { expectedChecksum: updated.checksum, renderer: fakePdf(1) });
     const previousPdf = updated.artifacts.pdfPath;
     const revisedDirection = `${updated.content.sections.find((section) => section.key === "career_direction").value}\n\n검토 결과를 문서로 남겨 팀이 같은 기준을 사용하도록 하겠습니다.`;
     updated = updatePackage(value.db, updated.id, {
@@ -168,13 +254,47 @@ test("editing an approved package archives its PDF and invalidates approval", as
   }
 });
 
+test("saving unchanged approved content preserves its PDF, approval, and revision history", async () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    let approved = updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue), expectedChecksum: packageValue.checksum,
+    });
+    approved = await approvePackage(value.db, approved.id, {
+      expectedChecksum: approved.checksum,
+      renderer: fakePdf(1),
+    });
+    const pdfPath = approved.artifacts.pdfPath;
+    const pdfContents = fs.readFileSync(pdfPath);
+    const revisionCount = value.db.prepare("SELECT COUNT(*) AS count FROM package_revisions WHERE package_id = ?").get(approved.id).count;
+    const approvalCount = value.db.prepare("SELECT COUNT(*) AS count FROM package_approvals WHERE package_id = ?").get(approved.id).count;
+
+    const unchanged = updatePackage(value.db, approved.id, {
+      sections: completeSections(approved), expectedChecksum: approved.checksum,
+    });
+
+    assert.equal(unchanged.state, "approved");
+    assert.equal(unchanged.checksum, approved.checksum);
+    assert.equal(unchanged.approvedChecksum, approved.approvedChecksum);
+    assert.equal(unchanged.artifacts.pdfPath, pdfPath);
+    assert.deepEqual(fs.readFileSync(pdfPath), pdfContents);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_revisions WHERE package_id = ?").get(approved.id).count, revisionCount);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_approvals WHERE package_id = ?").get(approved.id).count, approvalCount);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_approvals WHERE package_id = ? AND action = 'invalidated'").get(approved.id).count, 0);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
 test("submission freezes a verified PDF and blocks later package edits", async () => {
   const value = fixture();
   let packageValue;
   try {
     packageValue = createPackage(value.db, value.jobId);
     let updated = updatePackage(value.db, packageValue.id, { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum });
-    updated = await approvePackage(value.db, updated.id, { renderer: fakePdf(1) });
+    updated = await approvePackage(value.db, updated.id, { expectedChecksum: updated.checksum, renderer: fakePdf(1) });
     assert.equal(updated.approvedChecksum, updated.checksum);
     assert.equal(Boolean(updated.artifacts.pdfPath), true);
     assert.throws(() => prepareSubmission(value.db, updated.id, {
@@ -331,6 +451,63 @@ test("one-character resume sections fail section-specific minimum quality", () =
   }
 });
 
+test("resolved placeholders in current values are not kept failing because originalValue still has the template", () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    value.db.prepare("UPDATE resume_profile SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1")
+      .run("[회사명]의 업무 기준을 확인한 뒤 검증된 경험만 연결해 작성할 예정이며, 원본 템플릿은 이력에 남깁니다.");
+    packageValue = createPackage(value.db, value.jobId);
+    const resolvedSummary = "지원 기업의 업무 기준을 확인한 뒤 검증된 경험만 연결해 작성했으며, 사실과 근거가 확인된 내용만 사용했습니다.";
+    const updated = updatePackage(value.db, packageValue.id, {
+      expectedChecksum: packageValue.checksum,
+      sections: completeSections(packageValue, { summary: resolvedSummary }),
+    });
+    assert.match(updated.content.sections.find((section) => section.key === "summary").originalValue, /\[회사명\]/);
+    assert.equal(updated.content.sections.find((section) => section.key === "summary").value, resolvedSummary);
+    assert.equal(updated.quality.status, "passed");
+    assert.equal(updated.quality.findings.some((finding) => finding.key === "placeholder"), false);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("technical angle-bracket notation is not mistaken for an unresolved placeholder", () => {
+  for (const notation of ["std::vector<T>", "React <Suspense>"]) {
+    const quality = evaluatePackageQuality({
+      sections: [{
+        key: "summary",
+        label: "경력 요약",
+        kind: "text",
+        value: `${notation}를 활용해 다양한 직무의 요구사항을 안정적인 결과물로 구현했습니다.`,
+        source: "resume",
+        required: true,
+        minLength: 20,
+      }],
+    });
+    assert.equal(quality.status, "passed", notation);
+    assert.equal(quality.findings.some((finding) => finding.key === "placeholder"), false, notation);
+  }
+});
+
+test("named angle-bracket placeholders still block package approval", () => {
+  for (const placeholder of ["<회사명/직무명>", "<Company Name>"]) {
+    const quality = evaluatePackageQuality({
+      sections: [{
+        key: "summary",
+        label: "경력 요약",
+        kind: "text",
+        value: `${placeholder}에 맞춰 검증된 경험과 업무 성과를 구체적으로 작성합니다.`,
+        source: "resume",
+        required: true,
+        minLength: 20,
+      }],
+    });
+    assert.equal(quality.status, "review", placeholder);
+    assert.equal(quality.findings.some((finding) => finding.key === "placeholder"), true, placeholder);
+  }
+});
+
 test("resume markdown and application answers are stored as separate artifacts", () => {
   const value = fixture();
   let packageValue;
@@ -345,6 +522,390 @@ test("resume markdown and application answers are stored as separate artifacts",
     assert.doesNotMatch(resumeMarkdown, /이 역할에 기여할 방식을 설명해 주세요/);
     assert.match(answersMarkdown, /이 역할에 기여할 방식을 설명해 주세요/);
     assert.match(answersMarkdown, /현재 업무 흐름과 성공 기준/);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("approval uses a post-render checksum CAS and removes conflicted staged PDFs", async () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    let updated = updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue),
+      expectedChecksum: packageValue.checksum,
+    });
+    let releaseRender;
+    let signalStarted;
+    const renderStarted = new Promise((resolve) => { signalStarted = resolve; });
+    const renderReleased = new Promise((resolve) => { releaseRender = resolve; });
+    const approval = approvePackage(value.db, updated.id, {
+      expectedChecksum: updated.checksum,
+      renderer: async (_htmlPath, outputPath) => {
+        await fakePdf(1)(_htmlPath, outputPath);
+        signalStarted();
+        await renderReleased;
+      },
+    });
+    await renderStarted;
+    const revisedSummary = `${updated.content.sections.find((section) => section.key === "summary").value}\n\n동시 수정 충돌을 검증하는 새 문장입니다.`;
+    updated = updatePackage(value.db, updated.id, {
+      sections: completeSections(updated, { summary: revisedSummary }),
+      expectedChecksum: updated.checksum,
+    });
+    releaseRender();
+    await assert.rejects(approval, /changed while the PDF was rendering/);
+    assert.equal(value.db.prepare("SELECT state FROM application_packages WHERE id = ?").get(updated.id).state, "approval_pending");
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_approvals WHERE package_id = ? AND action = 'approved'").get(updated.id).count, 0);
+    assert.equal(fs.existsSync(path.join(updated.artifacts.directory, "resume.pdf")), false);
+    assert.equal(fs.readdirSync(updated.artifacts.directory).some((name) => name.includes(".staged-")), false);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("approval requires the client checksum and renders a private immutable HTML snapshot from DB content", async () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    const updated = updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue),
+      expectedChecksum: packageValue.checksum,
+    });
+    let rendererCalled = false;
+    await assert.rejects(() => approvePackage(value.db, updated.id, {
+      renderer: async () => { rendererCalled = true; },
+    }), /expectedChecksum is required/);
+    assert.equal(rendererCalled, false);
+
+    fs.writeFileSync(updated.artifacts.htmlPath, "<html><body>TAMPERED MUTABLE HTML</body></html>", "utf8");
+    let approvalSourcePath = "";
+    let approvalSource = "";
+    const approved = await approvePackage(value.db, updated.id, {
+      expectedChecksum: updated.checksum,
+      renderer: async (htmlPath, outputPath) => {
+        approvalSourcePath = htmlPath;
+        approvalSource = fs.readFileSync(htmlPath, "utf8");
+        if (process.platform !== "win32") assert.equal(fs.statSync(htmlPath).mode & 0o777, 0o600);
+        await fakePdf(1)(htmlPath, outputPath);
+      },
+    });
+    assert.equal(approved.state, "approved");
+    assert.notEqual(approvalSourcePath, updated.artifacts.htmlPath);
+    assert.doesNotMatch(approvalSource, /TAMPERED MUTABLE HTML/);
+    assert.match(approvalSource, /여러 이해관계자의 요구/);
+    assert.equal(fs.existsSync(approvalSourcePath), false);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("changed sources require confirmation and create an immutable v2 without rewriting v1", async () => {
+  const value = fixture();
+  let firstPackage;
+  try {
+    firstPackage = createPackage(value.db, value.jobId, { threshold: 80, maximumPages: 3 });
+    let firstApproved = updatePackage(value.db, firstPackage.id, {
+      sections: completeSections(firstPackage),
+      expectedChecksum: firstPackage.checksum,
+    }, { threshold: 80, maximumPages: 3 });
+    firstApproved = await approvePackage(value.db, firstApproved.id, {
+      expectedChecksum: firstApproved.checksum,
+      threshold: 80,
+      maximumPages: 3,
+      renderer: fakePdf(1),
+    });
+    const firstPdfChecksum = firstApproved.artifacts.pdfChecksum;
+    value.db.prepare("UPDATE resume_profile SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1")
+      .run("업데이트된 기본 이력서 내용으로 새 문서 버전을 만들어야 합니다. 기존 승인본은 변경하지 않습니다.");
+
+    const stale = getLatestPackageForJob(value.db, value.jobId, { threshold: 80, maximumPages: 3 });
+    assert.equal(stale.version, 1);
+    assert.equal(stale.refreshRequired, true);
+    assert.deepEqual(stale.refreshReasons.map((reason) => reason.key), ["base_resume_changed"]);
+    assert.equal(createPackage(value.db, value.jobId, { threshold: 80, maximumPages: 3 }).version, 1);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM application_packages WHERE job_id = ?").get(value.jobId).count, 1);
+
+    const secondPackage = createPackage(value.db, value.jobId, {
+      threshold: 80,
+      maximumPages: 3,
+      refreshConfirmed: true,
+    });
+    assert.equal(secondPackage.version, 2);
+    assert.equal(secondPackage.supersedesPackageId, firstApproved.id);
+    assert.equal(secondPackage.refreshRequired, false);
+    const preserved = value.db.prepare("SELECT state, resume_pdf_checksum, approved_checksum FROM application_packages WHERE id = ?").get(firstApproved.id);
+    assert.equal(preserved.state, "approved");
+    assert.equal(preserved.resume_pdf_checksum, firstPdfChecksum);
+    assert.equal(Boolean(preserved.approved_checksum), true);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_revisions WHERE package_id = ?").get(firstApproved.id).count, 1);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_approvals WHERE package_id = ? AND action = 'approved'").get(firstApproved.id).count, 1);
+    assert.throws(() => updatePackage(value.db, firstApproved.id, {
+      sections: completeSections(firstApproved),
+      expectedChecksum: firstApproved.checksum,
+    }), /Superseded package versions are immutable/);
+  } finally {
+    value.cleanup(firstPackage);
+  }
+});
+
+test("job tailoring and quality-rule changes are reported as separate refresh reasons", () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId, { threshold: 80, maximumPages: 3 });
+    value.db.prepare("UPDATE job_tailoring SET focus_sections_json = ?, updated_at = CURRENT_TIMESTAMP WHERE job_id = ?")
+      .run(JSON.stringify(["summary", "career_direction"]), value.jobId);
+    const stale = getLatestPackageForJob(value.db, value.jobId, { threshold: 90, maximumPages: 3 });
+    assert.deepEqual(stale.refreshReasons.map((reason) => reason.key), ["job_input_changed", "quality_rules_changed"]);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("submission preparation rejects stale fingerprints without creating a frozen artifact", async () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    let approved = updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue), expectedChecksum: packageValue.checksum,
+    });
+    approved = await approvePackage(value.db, approved.id, {
+      expectedChecksum: approved.checksum,
+      renderer: fakePdf(1),
+    });
+    value.db.prepare("UPDATE resume_profile SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1")
+      .run("제출 준비 전에 기본 이력서가 바뀌었으므로 새 버전 확인이 필요합니다.");
+    assert.throws(() => prepareSubmission(value.db, approved.id), /Package inputs changed/);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_submissions WHERE package_id = ?").get(approved.id).count, 0);
+    assert.equal(value.db.prepare("SELECT state FROM application_packages WHERE id = ?").get(approved.id).state, "approved");
+    assert.equal(fs.existsSync(path.join(approved.artifacts.directory, "submissions")), false);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("submission preparation CAS failure rolls back its DB transition and frozen copy", async () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    let approved = updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue), expectedChecksum: packageValue.checksum,
+    });
+    approved = await approvePackage(value.db, approved.id, {
+      expectedChecksum: approved.checksum,
+      renderer: fakePdf(1),
+    });
+    const checksumBefore = approved.artifacts.pdfChecksum;
+    assert.throws(() => prepareSubmission(value.db, approved.id, {
+      beforeCommit: () => {
+        value.db.prepare("UPDATE application_packages SET resume_pdf_checksum = 'concurrent-writer' WHERE id = ?")
+          .run(approved.id);
+      },
+    }), (error) => error.statusCode === 409 && /changed during submission preparation/.test(error.message));
+    const stored = value.db.prepare("SELECT state, resume_pdf_checksum FROM application_packages WHERE id = ?").get(approved.id);
+    assert.equal(stored.state, "approved");
+    assert.equal(stored.resume_pdf_checksum, checksumBefore);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_submissions WHERE package_id = ?").get(approved.id).count, 0);
+    assert.equal(fs.existsSync(path.join(approved.artifacts.directory, "submissions")), false);
+    assert.equal(fs.readdirSync(approved.artifacts.directory).some((name) => name.includes(".tmp-")), false);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("package artifacts, revisions, PDFs, and frozen submissions use private permissions", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX permission bits are not available on Windows");
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    let updated = updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue),
+      expectedChecksum: packageValue.checksum,
+    });
+    updated = await approvePackage(value.db, updated.id, { expectedChecksum: updated.checksum, renderer: fakePdf(1) });
+    updated = prepareSubmission(value.db, updated.id, { platform: "direct" });
+    const submission = value.db.prepare("SELECT frozen_pdf_path FROM package_submissions WHERE package_id = ?").get(updated.id);
+    const directories = [
+      path.dirname(path.dirname(path.dirname(updated.artifacts.directory))),
+      updated.artifacts.directory,
+      path.join(updated.artifacts.directory, ".revisions"),
+      path.join(updated.artifacts.directory, ".revisions", "revision-1"),
+      path.dirname(submission.frozen_pdf_path),
+    ];
+    const files = [
+      updated.artifacts.contentJsonPath,
+      updated.artifacts.markdownPath,
+      updated.artifacts.htmlPath,
+      updated.artifacts.applicationAnswersPath,
+      updated.artifacts.pdfPath,
+      submission.frozen_pdf_path,
+      path.join(updated.artifacts.directory, ".revisions", "revision-1", "content.json"),
+    ];
+    for (const directory of directories) assert.equal(fs.statSync(directory).mode & 0o777, 0o700, directory);
+    for (const file of files) assert.equal(fs.statSync(file).mode & 0o777, 0o600, file);
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("all package actions enforce job eligibility and submission never downgrades interview status", async () => {
+  const closedValue = fixture();
+  try {
+    closedValue.db.prepare("UPDATE jobs SET lifecycle_status = 'closed' WHERE id = ?").run(closedValue.jobId);
+    assert.throws(() => createPackage(closedValue.db, closedValue.jobId), /Closed jobs cannot use application packages/);
+  } finally {
+    closedValue.cleanup();
+  }
+
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    value.db.prepare("INSERT INTO application_state (job_id, workflow_status) VALUES (?, 'skipped') ON CONFLICT(job_id) DO UPDATE SET workflow_status = 'skipped'").run(value.jobId);
+    assert.throws(() => updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue), expectedChecksum: packageValue.checksum,
+    }), /Skipped jobs cannot use application packages/);
+    value.db.prepare("UPDATE application_state SET workflow_status = 'new' WHERE job_id = ?").run(value.jobId);
+    let updated = updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue), expectedChecksum: packageValue.checksum,
+    });
+    value.db.prepare("UPDATE application_state SET workflow_status = 'rejected' WHERE job_id = ?").run(value.jobId);
+    await assert.rejects(() => approvePackage(value.db, updated.id, { expectedChecksum: updated.checksum, renderer: fakePdf(1) }), /Rejected jobs cannot use application packages/);
+    value.db.prepare("UPDATE application_state SET workflow_status = 'new' WHERE job_id = ?").run(value.jobId);
+    updated = await approvePackage(value.db, updated.id, { expectedChecksum: updated.checksum, renderer: fakePdf(1) });
+    value.db.prepare("UPDATE jobs SET lifecycle_status = 'closed' WHERE id = ?").run(value.jobId);
+    assert.throws(() => prepareSubmission(value.db, updated.id), /Closed jobs cannot use application packages/);
+    value.db.prepare("UPDATE jobs SET lifecycle_status = 'active' WHERE id = ?").run(value.jobId);
+    updated = prepareSubmission(value.db, updated.id);
+    value.db.prepare("UPDATE application_state SET workflow_status = 'skipped' WHERE job_id = ?").run(value.jobId);
+    assert.throws(() => recordSubmitted(value.db, updated.id), /Skipped jobs cannot use application packages/);
+    value.db.prepare("UPDATE application_state SET workflow_status = 'rejected' WHERE job_id = ?").run(value.jobId);
+    assert.throws(() => recordSubmitted(value.db, updated.id), /Rejected jobs cannot use application packages/);
+    value.db.prepare("UPDATE application_state SET workflow_status = 'interview' WHERE job_id = ?").run(value.jobId);
+    updated = recordSubmitted(value.db, updated.id);
+    assert.equal(updated.state, "submitted");
+    assert.equal(value.db.prepare("SELECT workflow_status FROM application_state WHERE job_id = ?").get(value.jobId).workflow_status, "interview");
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("confirmed refresh preserves submitted versions and their frozen artifacts", async () => {
+  const value = fixture();
+  let firstPackage;
+  try {
+    firstPackage = createPackage(value.db, value.jobId);
+    let submitted = updatePackage(value.db, firstPackage.id, {
+      sections: completeSections(firstPackage), expectedChecksum: firstPackage.checksum,
+    });
+    submitted = await approvePackage(value.db, submitted.id, { expectedChecksum: submitted.checksum, renderer: fakePdf(1) });
+    submitted = prepareSubmission(value.db, submitted.id);
+    submitted = recordSubmitted(value.db, submitted.id);
+    const frozenBefore = value.db.prepare("SELECT status, frozen_pdf_path, frozen_pdf_checksum FROM package_submissions WHERE package_id = ?").get(submitted.id);
+    value.db.prepare("UPDATE resume_profile SET headline = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1")
+      .run("새 기준으로 갱신된 기본 이력서 헤드라인입니다");
+    const refreshed = createPackage(value.db, value.jobId, { refreshConfirmed: true });
+    assert.equal(refreshed.version, 2);
+    const firstAfter = value.db.prepare("SELECT state, approved_checksum FROM application_packages WHERE id = ?").get(submitted.id);
+    const frozenAfter = value.db.prepare("SELECT status, frozen_pdf_path, frozen_pdf_checksum FROM package_submissions WHERE package_id = ?").get(submitted.id);
+    assert.equal(firstAfter.state, "submitted");
+    assert.equal(Boolean(firstAfter.approved_checksum), true);
+    assert.deepEqual(frozenAfter, frozenBefore);
+    assert.equal(fs.existsSync(frozenAfter.frozen_pdf_path), true);
+  } finally {
+    value.cleanup(firstPackage);
+  }
+});
+
+test("a submit-ready package cannot be marked submitted after a newer version exists", async () => {
+  const value = fixture();
+  let firstPackage;
+  try {
+    firstPackage = createPackage(value.db, value.jobId);
+    let prepared = updatePackage(value.db, firstPackage.id, {
+      sections: completeSections(firstPackage), expectedChecksum: firstPackage.checksum,
+    });
+    prepared = await approvePackage(value.db, prepared.id, {
+      expectedChecksum: prepared.checksum,
+      renderer: fakePdf(1),
+    });
+    prepared = prepareSubmission(value.db, prepared.id);
+    value.db.prepare("UPDATE resume_profile SET headline = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1")
+      .run("새 제출 버전이 필요하도록 변경된 헤드라인입니다");
+    const secondPackage = createPackage(value.db, value.jobId, { refreshConfirmed: true });
+    assert.equal(secondPackage.version, 2);
+    assert.throws(() => recordSubmitted(value.db, prepared.id), /Superseded package versions are immutable/);
+    assert.equal(value.db.prepare("SELECT state FROM application_packages WHERE id = ?").get(prepared.id).state, "submit_ready");
+    assert.equal(value.db.prepare("SELECT status FROM package_submissions WHERE package_id = ?").get(prepared.id).status, "submit_ready");
+  } finally {
+    value.cleanup(firstPackage);
+  }
+});
+
+test("submission recording revalidates eligibility under the writer lock and rolls back a raced change", async () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    let prepared = updatePackage(value.db, packageValue.id, {
+      sections: completeSections(packageValue), expectedChecksum: packageValue.checksum,
+    });
+    prepared = await approvePackage(value.db, prepared.id, {
+      expectedChecksum: prepared.checksum,
+      renderer: fakePdf(1),
+    });
+    prepared = prepareSubmission(value.db, prepared.id);
+    assert.throws(() => recordSubmitted(value.db, prepared.id, {
+      beforeCommit: () => value.db.prepare("UPDATE jobs SET lifecycle_status = 'closed' WHERE id = ?").run(value.jobId),
+    }), (error) => error.statusCode === 409 && /Closed jobs/.test(error.message));
+    assert.equal(value.db.prepare("SELECT lifecycle_status FROM jobs WHERE id = ?").get(value.jobId).lifecycle_status, "active");
+    assert.equal(value.db.prepare("SELECT state FROM application_packages WHERE id = ?").get(prepared.id).state, "submit_ready");
+    assert.equal(value.db.prepare("SELECT status FROM package_submissions WHERE package_id = ?").get(prepared.id).status, "submit_ready");
+  } finally {
+    value.cleanup(packageValue);
+  }
+});
+
+test("submission records do not downgrade interview or offer workflow states", async () => {
+  for (const workflowStatus of ["interview", "offer"]) {
+    const value = fixture();
+    let packageValue;
+    try {
+      packageValue = createPackage(value.db, value.jobId);
+      let updated = updatePackage(value.db, packageValue.id, {
+        sections: completeSections(packageValue), expectedChecksum: packageValue.checksum,
+      });
+      updated = await approvePackage(value.db, updated.id, { expectedChecksum: updated.checksum, renderer: fakePdf(1) });
+      updated = prepareSubmission(value.db, updated.id);
+      value.db.prepare(`INSERT INTO application_state (job_id, workflow_status) VALUES (?, ?)
+                        ON CONFLICT(job_id) DO UPDATE SET workflow_status = excluded.workflow_status`)
+        .run(value.jobId, workflowStatus);
+      recordSubmitted(value.db, updated.id);
+      assert.equal(
+        value.db.prepare("SELECT workflow_status FROM application_state WHERE job_id = ?").get(value.jobId).workflow_status,
+        workflowStatus,
+      );
+    } finally {
+      value.cleanup(packageValue);
+    }
+  }
+});
+
+test("unreachable package states are no longer accepted by the schema", () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    assert.throws(
+      () => value.db.prepare("UPDATE application_packages SET state = 'approval_hold' WHERE id = ?").run(packageValue.id),
+      /CHECK constraint failed|invalid application package state/,
+    );
   } finally {
     value.cleanup(packageValue);
   }

@@ -1,32 +1,109 @@
 #!/bin/sh
 set -eu
+umask 077
 
 root="$(git rev-parse --show-toplevel)"
 head_sha="$(git rev-parse HEAD)"
 approval_file="$root/.git/PUSH_APPROVED"
 scanner="${PRE_PUBLISH_SAFETY_SCRIPT:-$HOME/.agents/skills/pre-publish-safety/scripts/pre_publish_safety.py}"
+actual_remote_name="${1:-}"
+actual_remote_url="${2:-}"
+ref_file=""
+report_dir=""
 
-if [ ! -f "$approval_file" ] || [ "$(tr -d '\r\n' < "$approval_file")" != "$head_sha" ]; then
-  echo "BLOCKED: explicit push approval for the current commit is missing." >&2
+cleanup() {
+  if [ -n "$ref_file" ]; then rm -f "$ref_file"; fi
+  if [ -n "$report_dir" ]; then rm -rf "$report_dir"; fi
+}
+trap cleanup EXIT
+
+if [ ! -f "$approval_file" ]; then
+  echo "BLOCKED: explicit push approval manifest is missing." >&2
   echo "After the user reviews the release manifest and explicitly approves this push," >&2
-  echo "write the current HEAD SHA to .git/PUSH_APPROVED and retry." >&2
+  echo "record sha, remote_name, remote_url, and remote_ref in .git/PUSH_APPROVED." >&2
   exit 1
 fi
+
+approved_sha="$(sed -n 's/^sha=//p' "$approval_file")"
+approved_remote_name="$(sed -n 's/^remote_name=//p' "$approval_file")"
+approved_remote_url="$(sed -n 's/^remote_url=//p' "$approval_file")"
+approved_remote_ref="$(sed -n 's/^remote_ref=//p' "$approval_file")"
+if [ "$(wc -l < "$approval_file" | tr -d ' ')" != "4" ] \
+  || [ -z "$approved_sha" ] || [ -z "$approved_remote_name" ] \
+  || [ -z "$approved_remote_url" ] || [ -z "$approved_remote_ref" ]; then
+  echo "BLOCKED: push approval manifest is malformed." >&2
+  exit 1
+fi
+if [ "$approved_sha" != "$head_sha" ] \
+  || [ "$approved_remote_name" != "$actual_remote_name" ] \
+  || [ "$approved_remote_url" != "$actual_remote_url" ]; then
+  echo "BLOCKED: approved commit or remote does not match this push." >&2
+  exit 1
+fi
+
+if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+  echo "BLOCKED: the release working tree must exactly match the approved commit." >&2
+  exit 1
+fi
+
+ref_file="$(mktemp "${TMPDIR:-/tmp}/job-search-operations-push-refs.XXXXXX")"
+cat > "$ref_file"
+if [ ! -s "$ref_file" ]; then
+  echo "BLOCKED: no concrete push ref was provided for approval verification." >&2
+  exit 1
+fi
+
+zero_sha="0000000000000000000000000000000000000000"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ -z "${local_ref:-}" ] || [ -z "${local_sha:-}" ] || [ -z "${remote_ref:-}" ] || [ -z "${remote_sha:-}" ]; then
+    echo "BLOCKED: malformed push ref metadata." >&2
+    exit 1
+  fi
+  if [ "$local_sha" = "$zero_sha" ]; then
+    echo "BLOCKED: remote ref deletion requires a separate explicitly approved workflow." >&2
+    exit 1
+  fi
+  if [ "$local_sha" != "$head_sha" ]; then
+    echo "BLOCKED: $local_ref points to $local_sha, not the approved HEAD $head_sha." >&2
+    exit 1
+  fi
+  if [ "$remote_ref" != "$approved_remote_ref" ]; then
+    echo "BLOCKED: $remote_ref is not the explicitly approved remote ref $approved_remote_ref." >&2
+    exit 1
+  fi
+  if [ "$remote_sha" != "$zero_sha" ]; then
+    if ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+      echo "BLOCKED: the current remote commit is unavailable locally; fetch it before requesting push approval." >&2
+      exit 1
+    fi
+    if ! git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
+      echo "BLOCKED: non-fast-forward or force push would replace remote history and requires a separate explicit workflow." >&2
+      exit 1
+    fi
+  fi
+done < "$ref_file"
 
 if [ ! -f "$scanner" ]; then
   echo "BLOCKED: pre-publish safety scanner was not found." >&2
   echo "Set PRE_PUBLISH_SAFETY_SCRIPT to the scanner path and retry." >&2
   exit 1
 fi
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "BLOCKED: gitleaks is required to inspect the full Git history before push." >&2
+  exit 1
+fi
 
 cd "$root"
 npm run verify
 
-report_base="${TMPDIR:-/tmp}/job-search-operations-prepush"
-python3 "$scanner" "$root" \
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/job-search-operations-prepush.XXXXXX")"
+scan_dir="$report_dir/release-candidate"
+git clone --quiet --no-local --no-hardlinks "$root" "$scan_dir"
+git -C "$scan_dir" checkout --quiet --detach "$head_sha"
+python3 "$scanner" "$scan_dir" \
   --run-external \
-  --md-out "${report_base}.md" \
-  --json-out "${report_base}.json" \
+  --md-out "$report_dir/report.md" \
+  --json-out "$report_dir/report.json" \
   --fail-on-review
 
 rm -f "$approval_file"

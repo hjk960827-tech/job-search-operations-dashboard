@@ -1,16 +1,22 @@
 import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
 import readline from "node:readline/promises";
 import yaml from "js-yaml";
-import { CONFIG_NAMES, readYaml } from "../lib/config.mjs";
-import { configPath, exampleConfigPath } from "../lib/paths.mjs";
+import { CONFIG_NAMES, configEntryExists, isValidSourceKey, readYaml } from "../lib/config.mjs";
+import { CONFIG_DIR, configPath, exampleConfigPath } from "../lib/paths.mjs";
 
 function list(value) {
   return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 const force = process.argv.includes("--force");
-const existing = CONFIG_NAMES.filter((name) => fs.existsSync(configPath(name)));
+if (configEntryExists(CONFIG_DIR) && fs.lstatSync(CONFIG_DIR).isSymbolicLink()) {
+  throw new Error("config/ must be a real local directory, not a symbolic link");
+}
+const linked = CONFIG_NAMES.filter((name) => configEntryExists(configPath(name)) && fs.lstatSync(configPath(name)).isSymbolicLink());
+if (linked.length) throw new Error(`심볼릭 링크 설정 파일은 덮어쓸 수 없습니다: ${linked.join(", ")}`);
+const existing = CONFIG_NAMES.filter((name) => configEntryExists(configPath(name)));
 if (existing.length && !force) {
   console.error(`Local configuration already exists: ${existing.join(", ")}`);
   console.error("Nothing was changed. Use --force only if you intend to replace it.");
@@ -31,6 +37,20 @@ try {
   }
 
   const configs = Object.fromEntries(CONFIG_NAMES.map((name) => [name, readYaml(exampleConfigPath(name))]));
+  const invalidSources = [...enabledSources].filter((key) => !isValidSourceKey(key));
+  if (invalidSources.length) throw new Error(`플랫폼 키는 영문·숫자·-·_만 사용할 수 있습니다: ${invalidSources.join(", ")}`);
+  let nextPriority = Math.max(0, ...Object.values(configs.sources.sources || {}).map((source) => Number(source.priority) || 0)) + 10;
+  for (const key of enabledSources) {
+    if (Object.hasOwn(configs.sources.sources, key)) continue;
+    configs.sources.sources[key] = {
+      label: key,
+      collect: true,
+      display: true,
+      lifecycle_check: true,
+      priority: nextPriority,
+    };
+    nextPriority += 10;
+  }
   configs.profile.setup_complete = true;
   configs.profile.identity.display_name = displayName.trim();
   configs.profile.location.regions = regions;
@@ -44,10 +64,12 @@ try {
     source.collect = enabledSources.has(key);
   }
   configs.resume.setup_complete = true;
-  configs.resume.target_tracks = targetRoles;
 
+  fs.mkdirSync(path.dirname(configPath("profile")), { recursive: true, mode: 0o700 });
+  fs.chmodSync(path.dirname(configPath("profile")), 0o700);
   for (const name of CONFIG_NAMES) {
     fs.writeFileSync(configPath(name), yaml.dump(configs[name], { lineWidth: 100, noRefs: true }), { mode: 0o600 });
+    fs.chmodSync(configPath(name), 0o600);
   }
   console.log("Local configuration created. These files are ignored by Git.");
   console.log("Next: APP_MODE=personal npm run db:init");

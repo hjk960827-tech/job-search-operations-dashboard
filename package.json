@@ -1,6 +1,6 @@
 {
   "name": "job-search-operations-dashboard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Korea-first, multi-role job search operations dashboard for Codex and Claude users",
   "type": "module",
@@ -17,7 +17,9 @@
     "test:pdf": "node scripts/pdf-smoke.mjs",
     "security:check": "node scripts/security-check.mjs",
     "isolation:check": "node scripts/isolation-check.mjs",
-    "verify": "npm run test && npm run test:pdf && npm run security:check && npm run isolation:check"
+    "verify:app": "npm run test && npm run test:pdf && npm run isolation:check",
+    "verify:release": "npm run verify:app && npm run security:check",
+    "verify": "npm run verify:release"
   },
   "keywords": [
     "job-search",
