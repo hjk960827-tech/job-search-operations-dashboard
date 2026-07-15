@@ -1,0 +1,65 @@
+setup_complete: false
+primary_selection:
+  prefer_direct_company: true
+  require_not_closed: true
+sources:
+  direct:
+    label: 기업 채용 페이지
+    collect: false
+    display: true
+    lifecycle_check: true
+    priority: 0
+  wanted:
+    label: 원티드
+    collect: false
+    display: true
+    lifecycle_check: true
+    priority: 10
+  remember:
+    label: 리멤버
+    collect: false
+    display: true
+    lifecycle_check: true
+    priority: 20
+  linkedin:
+    label: LinkedIn
+    collect: false
+    display: true
+    lifecycle_check: true
+    priority: 30
+  saramin:
+    label: 사람인
+    collect: false
+    display: true
+    lifecycle_check: true
+    priority: 40
+  jobkorea:
+    label: 잡코리아
+    collect: false
+    display: true
+    lifecycle_check: true
+    priority: 50
+  catch:
+    label: 캐치
+    collect: false
+    display: true
+    lifecycle_check: true
+    priority: 60
+  jobplanet:
+    label: 잡플래닛
+    collect: false
+    display: true
+    lifecycle_check: true
+    priority: 70
+  rocketpunch:
+    label: 로켓펀치
+    collect: false
+    display: true
+    lifecycle_check: true
+    priority: 80
+  rallit:
+    label: 랠릿
+    collect: false
+    display: true
+    lifecycle_check: true
+    priority: 90

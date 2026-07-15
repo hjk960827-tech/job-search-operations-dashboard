@@ -1,0 +1,4 @@
+setup_complete: false
+quality_rules:
+  minimum_score: 80
+  maximum_pdf_pages: 3

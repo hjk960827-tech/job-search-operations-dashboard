@@ -1,0 +1,1283 @@
+const state = {
+  data: null,
+  selectedJobId: null,
+  screen: "jobs",
+  filters: { search: "", track: "", platform: "", status: "", lifecycle: "active", favorite: false },
+  onboarding: null,
+};
+
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
+
+const statusLabels = {
+  new: "신규",
+  reviewing: "검토 중",
+  skipped: "제외",
+  applied: "지원 완료",
+  interview: "면접",
+  offer: "제안",
+  rejected: "종료",
+};
+
+const packageStateLabels = {
+  quality_hold: "품질 보완 필요",
+  approval_pending: "승인 대기",
+  approved: "승인 완료",
+  submit_ready: "제출 준비 완료",
+  submitted: "제출 완료",
+};
+
+const sourceStatusLabels = {
+  active: "게시 중",
+  closed: "마감",
+  unknown: "확인 필요",
+};
+
+function sourceConfidenceLabel(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return "확인 필요";
+  if (score >= 80) return "높음";
+  if (score >= 50) return "보통";
+  return "낮음";
+}
+
+function isReadOnlyDemo() {
+  return state.data?.mode !== "personal";
+}
+
+function protectDemoControl(control) {
+  if (isReadOnlyDemo()) {
+    control.disabled = true;
+    control.title = "예시 모드는 읽기 전용입니다. 개인 설정을 완료한 뒤 사용할 수 있습니다.";
+  }
+  return control;
+}
+
+function showToast(message, error = false) {
+  const toast = $("#toast");
+  toast.textContent = message;
+  toast.classList.toggle("error", error);
+  toast.hidden = false;
+  window.setTimeout(() => { toast.hidden = true; }, 3000);
+}
+
+function formatDateTime(value) {
+  if (!value) return "";
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? `${value.replace(" ", "T")}Z` : value;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return value;
+  const options = {
+    timeZone: state.data?.profile?.timezone || "Asia/Seoul",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  };
+  try {
+    return new Intl.DateTimeFormat("ko-KR", options).format(date);
+  } catch {
+    return new Intl.DateTimeFormat("ko-KR", { ...options, timeZone: "Asia/Seoul" }).format(date);
+  }
+}
+
+async function request(url, options = {}) {
+  const isFormData = options.body instanceof FormData;
+  const response = await fetch(url, {
+    ...options,
+    headers: isFormData ? { ...(options.headers || {}) } : { "content-type": "application/json", ...(options.headers || {}) },
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "요청을 처리하지 못했습니다.");
+  return payload;
+}
+
+function setScreen(screen) {
+  state.screen = screen;
+  $$(".tab").forEach((button) => button.classList.toggle("active", button.dataset.screen === screen));
+  $("#jobsScreen").hidden = screen !== "jobs";
+  $("#resumeScreen").hidden = screen !== "resume";
+  $("#settingsScreen").hidden = screen !== "settings";
+  $("#onboardingScreen").hidden = true;
+}
+
+function fillSelect(select, values) {
+  const current = select.value;
+  const first = select.firstElementChild.cloneNode(true);
+  select.replaceChildren(first);
+  for (const value of values.filter(Boolean).sort((a, b) => a.localeCompare(b))) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    select.append(option);
+  }
+  select.value = values.includes(current) ? current : "";
+}
+
+function filteredJobs() {
+  const query = state.filters.search.toLowerCase();
+  return state.data.jobs.filter((job) => {
+    if (query && !`${job.companyName} ${job.title} ${job.summary}`.toLowerCase().includes(query)) return false;
+    if (state.filters.track && job.track !== state.filters.track) return false;
+    if (state.filters.platform && !job.sources.some((source) => source.platform === state.filters.platform)) return false;
+    if (state.filters.status && job.application.workflowStatus !== state.filters.status) return false;
+    const lifecycleStatus = String(job.status || "unknown").trim().toLowerCase();
+    const archived = ["closed", "expired", "ended"].includes(lifecycleStatus)
+      || ["skipped", "rejected"].includes(job.application.workflowStatus);
+    if (state.filters.lifecycle === "active" && archived) return false;
+    if (state.filters.lifecycle === "archive" && !archived) return false;
+    if (state.filters.favorite && !job.application.favorite) return false;
+    return true;
+  });
+}
+
+function createJobCard(job) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `job-card${state.selectedJobId === job.id ? " active" : ""}`;
+  const body = document.createElement("div");
+  const company = document.createElement("p");
+  company.className = "job-company";
+  company.textContent = `${job.application.favorite ? "★ " : ""}${job.companyName}`;
+  if (job.application.favorite) company.classList.add("favorite-star");
+  const title = document.createElement("h3");
+  title.textContent = job.title;
+  const meta = document.createElement("div");
+  meta.className = "job-meta";
+  for (const value of [job.track, job.location, job.employmentType, statusLabels[job.application.workflowStatus]]) {
+    if (!value) continue;
+    const span = document.createElement("span");
+    span.textContent = value;
+    meta.append(span);
+  }
+  body.append(company, title, meta);
+  const score = document.createElement("span");
+  score.className = `job-score${job.score === null ? " empty" : ""}`;
+  const reviewBelow = Number(state.data.scoreReviewBelow ?? 70);
+  if (job.score !== null && Number(job.score) < reviewBelow) {
+    score.classList.add("caution");
+    score.title = "적합도 주의";
+  }
+  score.textContent = job.score === null ? "–" : Math.round(job.score);
+  button.append(body, score);
+  button.addEventListener("click", () => {
+    state.selectedJobId = job.id;
+    renderJobs();
+    renderDetail(job.id);
+  });
+  return button;
+}
+
+function renderJobs() {
+  const jobs = filteredJobs();
+  $("#jobCount").textContent = `${jobs.length}건`;
+  const list = $("#jobList");
+  list.replaceChildren(...jobs.map(createJobCard));
+  if (!jobs.length) {
+    const empty = document.createElement("div");
+    empty.className = "card empty-state";
+    const title = document.createElement("h3");
+    title.textContent = "조건에 맞는 공고가 없습니다";
+    const copy = document.createElement("p");
+    copy.textContent = "필터를 조정하거나 개인 설정의 검색 조건을 확인해 주세요.";
+    empty.append(title, copy);
+    list.append(empty);
+  }
+}
+
+function sourceLabel(platform) {
+  return state.data.sources?.[platform]?.label || platform;
+}
+
+function renderDetail(jobId) {
+  const job = state.data.jobs.find((item) => item.id === jobId);
+  const detail = $("#jobDetail");
+  detail.replaceChildren();
+  if (!job) return;
+
+  const company = document.createElement("p");
+  company.className = "detail-company";
+  company.textContent = job.companyName;
+  const title = document.createElement("h3");
+  title.className = "detail-title";
+  title.textContent = job.title;
+  const meta = document.createElement("div");
+  meta.className = "job-meta";
+  for (const value of [job.track, job.location, job.employmentType]) {
+    if (!value) continue;
+    const span = document.createElement("span");
+    span.textContent = value;
+    meta.append(span);
+  }
+  const summary = document.createElement("p");
+  summary.className = "detail-summary";
+  summary.textContent = job.summary || "공고 요약이 아직 없습니다.";
+  detail.append(company, title, meta, summary);
+  if (job.score !== null && Number(job.score) < Number(state.data.scoreReviewBelow ?? 70)) {
+    const caution = document.createElement("p");
+    caution.className = "package-state hold";
+    caution.textContent = "적합도 주의 · 사용자 기준 점수 미만";
+    detail.append(caution);
+  }
+  if (job.scoreMode === "scalar" && job.score !== null) {
+    const scoreSource = document.createElement("p");
+    scoreSource.className = "subtle";
+    scoreSource.textContent = "외부에서 전달된 단일 적합도 점수입니다.";
+    detail.append(scoreSource);
+  }
+  if (job.score === null && state.data.scoringProfile?.configured === false) {
+    const scoringNotice = document.createElement("p");
+    scoringNotice.className = "package-state hold";
+    scoringNotice.textContent = "평가 기준 설정 필요 · 점수를 자동 계산하지 않았습니다.";
+    detail.append(scoringNotice);
+  }
+  if (job.scoreMode === "breakdown" && Array.isArray(job.scoreBreakdown?.dimensions)) {
+    const breakdown = document.createElement("section");
+    breakdown.className = "score-breakdown";
+    const heading = document.createElement("h4");
+    heading.textContent = "적합도 판단 근거";
+    breakdown.append(heading);
+    for (const dimension of job.scoreBreakdown.dimensions) {
+      const row = document.createElement("div");
+      row.className = "score-breakdown-row";
+      const label = document.createElement("strong");
+      label.textContent = `${dimension.label} ${Math.round(Number(dimension.score) || 0)}점`;
+      const reason = document.createElement("p");
+      reason.textContent = dimension.reason || "판단 이유가 입력되지 않았습니다.";
+      row.append(label, reason);
+      if (Array.isArray(dimension.gaps) && dimension.gaps.length) {
+        const gaps = document.createElement("small");
+        gaps.textContent = `확인할 점: ${dimension.gaps.join(" · ")}`;
+        row.append(gaps);
+      }
+      breakdown.append(row);
+    }
+    detail.append(breakdown);
+  }
+
+  if (job.primarySource) {
+    const actions = document.createElement("div");
+    actions.className = "detail-actions";
+    const link = document.createElement("a");
+    link.className = "primary-link";
+    link.href = job.primarySource.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = `${sourceLabel(job.primarySource.platform)}에서 보기`;
+    const favorite = document.createElement("button");
+    favorite.type = "button";
+    favorite.className = "secondary-button";
+    favorite.textContent = job.application.favorite ? "관심 해제" : "관심 추가";
+    favorite.addEventListener("click", () => saveState(job, { favorite: !job.application.favorite }));
+    protectDemoControl(favorite);
+    actions.append(link, favorite);
+    detail.append(actions);
+  }
+
+  const sourceHeading = document.createElement("h4");
+  sourceHeading.textContent = `확인된 출처 ${job.sources.length}개`;
+  const sourceList = document.createElement("div");
+  sourceList.className = "source-list";
+  for (const source of job.sources) {
+    const row = document.createElement("div");
+    row.className = "source-row";
+    const info = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = sourceLabel(source.platform);
+    const status = document.createElement("span");
+    status.textContent = `${sourceStatusLabels[source.status] || "확인 필요"} · 상태 확인 신뢰도 ${sourceConfidenceLabel(source.confidence)}`;
+    info.append(label, document.createElement("br"), status);
+    const link = document.createElement("a");
+    link.href = source.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    const isPrimary = source.platform === job.primarySource?.platform && source.url === job.primarySource?.url;
+    link.textContent = isPrimary ? "대표" : "열기";
+    row.append(info, link);
+    sourceList.append(row);
+  }
+  detail.append(sourceHeading, sourceList);
+
+  const statePanel = document.createElement("div");
+  statePanel.className = "detail-state";
+  const statusLabel = document.createElement("label");
+  const statusCaption = document.createElement("span");
+  statusCaption.textContent = "지원 상태";
+  const statusSelect = document.createElement("select");
+  for (const [value, label] of Object.entries(statusLabels)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    statusSelect.append(option);
+  }
+  statusSelect.value = job.application.workflowStatus;
+  protectDemoControl(statusSelect);
+  statusLabel.append(statusCaption, statusSelect);
+  const noteLabel = document.createElement("label");
+  const noteCaption = document.createElement("span");
+  noteCaption.textContent = "메모";
+  const note = document.createElement("textarea");
+  note.rows = 4;
+  note.maxLength = 2000;
+  note.value = job.application.note;
+  protectDemoControl(note);
+  noteLabel.append(noteCaption, note);
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "primary-button";
+  save.textContent = "상태 저장";
+  save.addEventListener("click", () => saveState(job, { workflowStatus: statusSelect.value, note: note.value }));
+  protectDemoControl(save);
+  statePanel.append(statusLabel, noteLabel, save);
+  detail.append(statePanel);
+  detail.append(renderPackagePanel(job));
+}
+
+function packageField(section) {
+  const label = document.createElement("label");
+  label.className = "package-field";
+  const heading = document.createElement("span");
+  heading.className = "package-field-heading";
+  const caption = document.createElement("strong");
+  caption.textContent = section.label;
+  heading.append(caption);
+  if (section.source === "application_question") {
+    const badge = document.createElement("em");
+    badge.textContent = section.required ? "필수 지원서 질문" : "선택 지원서 질문";
+    heading.append(badge);
+  }
+  const input = section.key === "headline" ? document.createElement("input") : document.createElement("textarea");
+  if (input instanceof HTMLTextAreaElement) input.rows = section.kind === "list" ? 4 : 5;
+  input.dataset.packageSectionKey = section.key;
+  if (section.maxLength) input.maxLength = section.maxLength;
+  input.value = section.kind === "list" ? (section.value || []).join("\n") : (section.value || "");
+  const reason = document.createElement("small");
+  const minimum = section.kind === "list"
+    ? `최소 ${section.minItems || 1}개, 각 ${section.minItemLength || 1}자`
+    : `최소 ${section.minLength || 1}자`;
+  reason.textContent = `${section.reason || "등록 이력서에서 선택된 공고별 수정 항목입니다."} · ${minimum}`;
+  label.append(heading, input, reason);
+  return label;
+}
+
+function applyJobs(payload, jobId) {
+  state.data.jobs = payload.jobs;
+  renderJobs();
+  renderDetail(jobId);
+}
+
+function packageAction(label, className, handler) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  button.addEventListener("click", handler);
+  return protectDemoControl(button);
+}
+
+function renderPackagePanel(job) {
+  const panel = document.createElement("section");
+  panel.className = "package-panel";
+  const heading = document.createElement("div");
+  heading.className = "package-heading";
+  const title = document.createElement("h4");
+  title.textContent = "공고별 지원 문서 작업본";
+  heading.append(title);
+  panel.append(heading);
+
+  if (!job.package) {
+    const copy = document.createElement("p");
+    copy.textContent = "기본 이력서에서 공고에 연결된 항목을 불러와 직접 수정하는 작업본입니다. 새 경력을 자동으로 작성하거나 직무 적합성을 판정하지 않습니다.";
+    const create = packageAction("공고별 작업본 만들기", "primary-button", async () => {
+      try {
+        const payload = await request(`/api/jobs/${job.id}/package`, { method: "POST", body: "{}" });
+        applyJobs(payload, job.id);
+        showToast("공고별 작업본을 만들었습니다.");
+      } catch (error) { showToast(error.message, true); }
+    });
+    panel.append(copy, create);
+    return panel;
+  }
+
+  const packageValue = job.package;
+  const packageLocked = packageValue.refreshAvailable === false;
+  title.textContent = `공고별 지원 문서 작업본 · v${packageValue.version}`;
+  const badge = document.createElement("span");
+  badge.className = `package-state ${packageValue.quality.status === "passed" ? "ready" : "hold"}`;
+  badge.textContent = packageStateLabels[packageValue.state] || packageValue.state;
+  heading.append(badge);
+
+  const quality = document.createElement("p");
+  quality.className = "package-quality";
+  quality.textContent = `작성 완성도 ${Math.round(packageValue.quality.score)}점 · ${packageValue.quality.status === "passed" ? "필수 작성 기준 통과" : "필수 항목 보완 필요"}`;
+  panel.append(quality);
+  if (packageValue.quality.findings?.length) {
+    const findings = document.createElement("ul");
+    findings.className = "package-findings";
+    for (const item of packageValue.quality.findings) {
+      const li = document.createElement("li");
+      li.textContent = item.message;
+      findings.append(li);
+    }
+    panel.append(findings);
+  }
+
+  if (packageValue.refreshRequired) {
+    const refreshNotice = document.createElement("div");
+    refreshNotice.className = "package-frozen";
+    const refreshTitle = document.createElement("strong");
+    refreshTitle.textContent = "기준 정보가 변경되어 이 문서를 그대로 제출할 수 없습니다.";
+    const refreshReasons = document.createElement("p");
+    refreshReasons.textContent = (packageValue.refreshReasons || [])
+      .map((item) => typeof item === "string" ? item : item?.message || item?.key || "")
+      .filter(Boolean)
+      .join(" · ")
+      || "기본 이력서, 공고 정보 또는 작성 기준이 변경되었습니다.";
+    refreshNotice.append(refreshTitle, refreshReasons);
+    if (packageValue.refreshAvailable) {
+      refreshNotice.append(packageAction("변경사항을 반영해 새 버전 만들기", "primary-button", async () => {
+        try {
+          const payload = await request(`/api/jobs/${job.id}/package`, {
+            method: "POST",
+            body: JSON.stringify({ refreshConfirmed: true }),
+          });
+          applyJobs(payload, job.id);
+          showToast("현재 기준으로 새 문서 버전을 만들었습니다.");
+        } catch (error) { showToast(error.message, true); }
+      }));
+    }
+    panel.append(refreshNotice);
+  } else if (packageLocked) {
+    const lockedNotice = document.createElement("p");
+    lockedNotice.className = "package-frozen";
+    lockedNotice.textContent = "마감·제외·종료된 공고의 지원 문서는 수정하거나 제출 단계로 이동할 수 없습니다.";
+    panel.append(lockedNotice);
+  }
+
+  const editable = !packageValue.refreshRequired
+    && !packageLocked
+    && ["quality_hold", "approval_pending", "approved"].includes(packageValue.state);
+  if (editable) {
+    const form = document.createElement("div");
+    form.className = "package-form";
+    if (packageValue.content.protectedFacts?.length) {
+      const facts = document.createElement("div");
+      facts.className = "protected-facts";
+      const factsTitle = document.createElement("strong");
+      factsTitle.textContent = "사실 보호 항목 · 공고별 문서에서 수정되지 않습니다";
+      facts.append(factsTitle);
+      for (const fact of packageValue.content.protectedFacts) {
+        const item = document.createElement("span");
+        item.textContent = `${fact.label}: ${fact.value}`;
+        facts.append(item);
+      }
+      form.append(facts);
+    }
+    for (const section of packageValue.content.sections || []) form.append(packageField(section));
+    if (!packageValue.content.sections?.length) {
+      const empty = document.createElement("p");
+      empty.className = "package-frozen";
+      empty.textContent = "기본 이력서에서 내용을 입력하고 공고별 수정 허용 항목을 선택해 주세요.";
+      form.append(empty);
+    }
+    const actions = document.createElement("div");
+    actions.className = "package-actions";
+    actions.append(packageAction("수정 내용 저장", "secondary-button", async () => {
+      const lines = (value) => value.split("\n").map((item) => item.trim()).filter(Boolean);
+      const sectionDefinitions = new Map((packageValue.content.sections || []).map((section) => [section.key, section]));
+      const sections = [...form.querySelectorAll("[data-package-section-key]")].map((input) => {
+        const definition = sectionDefinitions.get(input.dataset.packageSectionKey);
+        return { key: input.dataset.packageSectionKey, value: definition?.kind === "list" ? lines(input.value) : input.value };
+      });
+      try {
+        const payload = await request(`/api/packages/${packageValue.id}`, {
+          method: "PUT",
+          body: JSON.stringify({ sections, expectedChecksum: packageValue.checksum }),
+        });
+        applyJobs(payload, job.id);
+        showToast("수정 내용과 이전 버전을 안전하게 저장했습니다.");
+      } catch (error) { showToast(error.message, true); }
+    }));
+    if (packageValue.state === "approval_pending") {
+      actions.append(packageAction("문안 확인 후 PDF 생성·승인", "primary-button", async () => {
+        try {
+          const payload = await request(`/api/packages/${packageValue.id}/approve`, {
+            method: "POST",
+            body: JSON.stringify({ expectedChecksum: packageValue.checksum }),
+          });
+          applyJobs(payload, job.id);
+          showToast("현재 문안으로 PDF를 생성하고 승인했습니다.");
+        } catch (error) { showToast(error.message, true); }
+      }));
+    }
+    form.append(actions);
+    panel.append(form);
+  }
+
+  if (packageValue.pdf?.available) {
+    const pdf = document.createElement("p");
+    pdf.className = "package-pdf";
+    pdf.textContent = `PDF 작업본 · ${packageValue.pdf.pages}페이지 · 승인 내용 고정됨`;
+    panel.append(pdf);
+  }
+  if (packageValue.applicationAnswers?.available) {
+    const answers = document.createElement("p");
+    answers.className = "package-pdf";
+    answers.textContent = `${packageValue.applicationAnswers.fileName} · 지원서 질문 답변은 이력서와 별도로 저장됩니다.`;
+    panel.append(answers);
+  }
+  if (packageValue.state === "approved") {
+    const manualSubmissionReady = Boolean(
+      packageValue.pdf?.available
+      && packageValue.approvedChecksum
+      && packageValue.approvedChecksum === packageValue.checksum
+      && !packageValue.refreshRequired
+      && !packageLocked,
+    );
+    const prepare = packageAction("수기 제출 준비", "primary-button", async () => {
+      try {
+        const payload = await request(`/api/packages/${packageValue.id}/prepare`, {
+          method: "POST",
+          body: JSON.stringify({ platform: job.primarySource?.platform || "" }),
+        });
+        applyJobs(payload, job.id);
+        showToast("수기 제출할 PDF를 확정했습니다. 채용 플랫폼에서 직접 지원해 주세요.");
+      } catch (error) { showToast(error.message, true); }
+    });
+    prepare.disabled = isReadOnlyDemo() || !manualSubmissionReady;
+    prepare.title = isReadOnlyDemo()
+      ? "예시 모드는 읽기 전용입니다."
+      : manualSubmissionReady
+        ? "승인된 PDF를 확정하고 수기 제출 단계로 이동합니다."
+        : "문안 승인과 PDF 준비 상태를 먼저 확인해 주세요.";
+    panel.append(prepare);
+  }
+  if (packageValue.state === "submit_ready" && !packageLocked) {
+    panel.append(packageAction("제출 완료 기록", "primary-button", async () => {
+      try {
+        const payload = await request(`/api/packages/${packageValue.id}/submitted`, { method: "POST", body: "{}" });
+        applyJobs(payload, job.id);
+        showToast("확정된 제출본을 기준으로 수기 제출 완료를 기록했습니다.");
+      } catch (error) { showToast(error.message, true); }
+    }));
+  }
+  if (packageValue.state === "submitted") {
+    const frozen = document.createElement("p");
+    frozen.className = "package-frozen";
+    frozen.textContent = "제출 완료된 문안과 PDF는 수정할 수 없습니다.";
+    panel.append(frozen);
+  }
+  return panel;
+}
+
+async function saveState(job, patch) {
+  try {
+    const payload = await request(`/api/jobs/${job.id}/state`, { method: "PATCH", body: JSON.stringify(patch) });
+    state.data.jobs = payload.jobs;
+    renderJobs();
+    renderDetail(job.id);
+    showToast("공고 상태를 저장했습니다.");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+const onboardingStepLabels = [
+  "저장 안내", "문서 등록", "문서 분석", "분석 확인", "목표 설정", "지원 조건",
+  "검색 전략", "플랫폼", "이력서 권한", "평가 기준", "최종 확인",
+];
+
+function splitEntries(value) {
+  return String(value || "").split(/[\n,]/).map((item) => item.trim()).filter((item, index, values) => item && values.indexOf(item) === index);
+}
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function inputValue(selector, value) {
+  const control = $(selector);
+  if (control) control.value = value ?? "";
+}
+
+function renderDocumentStatus(kind, selector) {
+  const documentValue = state.onboarding.documents.find((item) => item.kind === kind);
+  const target = $(selector);
+  target.textContent = documentValue
+    ? `${documentValue.originalName} · ${(documentValue.size / 1024 / 1024).toFixed(1)}MB`
+    : "등록된 문서 없음";
+  target.classList.toggle("ready-text", Boolean(documentValue));
+  $(`#${kind}DocumentDelete`).hidden = !documentValue;
+}
+
+function renderAnalysisReview() {
+  const container = $("#analysisReview");
+  container.replaceChildren();
+  const groups = [
+    ["facts", "확인된 사실", "value"],
+    ["evidence", "경험·성과 근거", "description"],
+    ["sections", "이력서 항목", "value"],
+  ];
+  for (const [type, headingText, valueField] of groups) {
+    const heading = document.createElement("h4");
+    heading.textContent = headingText;
+    container.append(heading);
+    const items = state.onboarding.analysis[type] || [];
+    for (const item of items) {
+      const review = state.onboarding.analysisReview[type]?.[item.id] || { decision: "pending" };
+      const row = document.createElement("article");
+      row.className = "analysis-review-row";
+      row.dataset.reviewType = type;
+      row.dataset.reviewId = item.id;
+      const top = document.createElement("div");
+      top.className = "analysis-review-heading";
+      const label = document.createElement("strong");
+      label.textContent = item.label || item.title || item.key;
+      const decision = document.createElement("select");
+      decision.dataset.reviewDecision = "true";
+      for (const [value, text] of [["pending", "선택 필요"], ["use", "그대로 사용"], ["edit", "수정 후 사용"], ["exclude", "제외"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = text;
+        decision.append(option);
+      }
+      decision.value = ["use", "edit", "exclude"].includes(review.decision) ? review.decision : "pending";
+      top.append(label, decision);
+      const editor = document.createElement("textarea");
+      editor.rows = type === "evidence" ? 5 : 4;
+      editor.dataset.reviewValue = "true";
+      const originalValue = item[valueField];
+      const reviewedValue = review[valueField] ?? originalValue;
+      editor.value = Array.isArray(reviewedValue) ? reviewedValue.join("\n") : reviewedValue || "";
+      const source = document.createElement("small");
+      if (type === "facts") source.textContent = `출처 위치: ${item.sourceLocator || "문서 내 위치 미기재"} · 신뢰도 ${Math.round(item.confidence || 0)}%`;
+      else source.textContent = "등록 문서에서 확인된 내용만 남겨 주세요.";
+      row.append(top, editor, source);
+      container.append(row);
+    }
+    if (!items.length) {
+      const empty = document.createElement("p");
+      empty.className = "subtle";
+      empty.textContent = "분석된 항목이 없습니다.";
+      container.append(empty);
+    }
+  }
+}
+
+function renderOnboardingSources() {
+  const container = $("#onboardingSources");
+  container.replaceChildren();
+  const entries = Object.entries(state.onboarding.sources.items || {}).sort((a, b) => Number(a[1].priority) - Number(b[1].priority));
+  for (const [key, item] of entries) {
+    const row = document.createElement("div");
+    row.className = "onboarding-source-row";
+    row.dataset.sourceKey = key;
+    const name = document.createElement("strong");
+    name.textContent = item.label || key;
+    const controls = document.createElement("div");
+    controls.className = "source-control-grid";
+    for (const [field, label] of [["collect", "수집"], ["display", "표시"], ["lifecycleCheck", "마감 확인"]]) {
+      const wrapper = document.createElement("label");
+      wrapper.className = "inline-check";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.dataset.sourceField = field;
+      input.checked = item[field] !== false && (field !== "collect" || item.collect === true);
+      wrapper.append(input, document.createTextNode(` ${label}`));
+      controls.append(wrapper);
+    }
+    const priority = document.createElement("input");
+    priority.type = "number";
+    priority.dataset.sourceField = "priority";
+    priority.value = item.priority;
+    priority.title = "대표 링크 우선순위";
+    controls.append(priority);
+    row.append(name, controls);
+    container.append(row);
+  }
+}
+
+function renderOnboardingSections() {
+  const builtin = $("#setupEditableSections");
+  builtin.replaceChildren();
+  for (const [key, definition] of Object.entries(state.onboarding.builtinSections || {})) {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.setupEditableSection = key;
+    input.checked = (state.onboarding.resume.editableSections || []).includes(key);
+    label.append(input, document.createTextNode(` ${definition.label}`));
+    builtin.append(label);
+  }
+  const custom = $("#setupCustomSections");
+  custom.replaceChildren();
+  const customItems = (state.onboarding.analysis.sections || []).filter((item) => item.key.startsWith("custom:"));
+  for (const item of customItems) {
+    const label = document.createElement("label");
+    label.className = "custom-permission-row";
+    label.dataset.setupCustomPermissionId = item.id;
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = state.onboarding.resume.customPermissions?.[item.id] !== false;
+    label.append(input, document.createTextNode(` ${item.label} · 공고별 수정 허용`));
+    custom.append(label);
+  }
+  if (!customItems.length) {
+    const empty = document.createElement("p");
+    empty.className = "subtle";
+    empty.textContent = "기존 항목과 겹치지 않는 추가 섹션이 없습니다.";
+    custom.append(empty);
+  }
+}
+
+function renderScoringDimensions() {
+  const container = $("#setupScoringDimensions");
+  container.replaceChildren();
+  for (const item of state.onboarding.search.scoring?.dimensions || []) {
+    const row = document.createElement("div");
+    row.className = "scoring-row";
+    row.dataset.scoringId = item.id;
+    const enabledLabel = document.createElement("label");
+    enabledLabel.className = "inline-check";
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.dataset.scoringField = "enabled";
+    enabled.checked = item.enabled !== false;
+    enabledLabel.append(enabled, document.createTextNode(` ${item.label}`));
+    const weight = document.createElement("input");
+    weight.type = "number";
+    weight.min = "0";
+    weight.max = "100";
+    weight.dataset.scoringField = "weight";
+    weight.value = item.weight;
+    row.append(enabledLabel, weight);
+    container.append(row);
+  }
+  updateScoringWeightTotal();
+}
+
+function updateScoringWeightTotal() {
+  const enabledRows = $$('[data-scoring-id]').filter((row) => row.querySelector('[data-scoring-field="enabled"]')?.checked);
+  const total = enabledRows.reduce((sum, row) => sum + Number(row.querySelector('[data-scoring-field="weight"]')?.value || 0), 0);
+  const target = $("#scoringWeightTotal");
+  target.textContent = enabledRows.length ? `활성 가중치 합계 ${total} / 100` : "평가 기준 사용 안 함 · 점수를 자동 계산하지 않습니다.";
+  target.classList.toggle("invalid-text", enabledRows.length > 0 && Math.abs(total - 100) > 0.0001);
+}
+
+function renderOnboardingPreview() {
+  const target = $("#onboardingPreview");
+  const enabledSources = Object.values(state.onboarding.sources.items || {}).filter((item) => item.collect).map((item) => item.label);
+  const usedSections = Object.entries(state.onboarding.builtinSections || {})
+    .filter(([key]) => (state.onboarding.resume.editableSections || []).includes(key)).map(([, item]) => item.label);
+  const cards = [
+    ["목표 직무", [state.onboarding.search.primaryRole, ...(state.onboarding.search.secondaryRoles || [])].filter(Boolean).join(" · ") || "입력 필요"],
+    ["희망 지역", (state.onboarding.search.regions || []).join(" · ") || "제한 없음"],
+    ["수집 플랫폼", enabledSources.join(" · ") || "선택 필요"],
+    ["검색 포함어", (state.onboarding.search.includeKeywords || []).join(" · ") || "없음"],
+    ["공고 트랙", (state.onboarding.search.tracks || []).join(" · ") || "목표 직무 기준"],
+    ["수정 허용 항목", usedSections.join(" · ") || "없음"],
+  ];
+  target.replaceChildren();
+  for (const [label, value] of cards) {
+    const card = document.createElement("article");
+    const heading = document.createElement("strong");
+    heading.textContent = label;
+    const copy = document.createElement("p");
+    copy.textContent = value;
+    card.append(heading, copy);
+    target.append(card);
+  }
+}
+
+function renderOnboarding() {
+  const onboarding = state.onboarding;
+  $(".tabs").hidden = true;
+  $("#jobsScreen").hidden = true;
+  $("#resumeScreen").hidden = true;
+  $("#settingsScreen").hidden = true;
+  $("#onboardingScreen").hidden = false;
+  $("#modeBadge").textContent = "초기 설정";
+  $("#displayName").textContent = onboarding.profile.displayName || "";
+  $("#exampleBanner").hidden = true;
+  $("#onboardingProgress").textContent = `${onboarding.currentStep} / 11`;
+  const steps = $("#onboardingSteps");
+  steps.replaceChildren();
+  onboardingStepLabels.forEach((labelText, index) => {
+    const item = document.createElement("li");
+    item.textContent = `${index + 1}. ${labelText}`;
+    if (index + 1 === onboarding.currentStep) item.className = "active";
+    if (index + 1 < onboarding.currentStep) item.className = "complete";
+    steps.append(item);
+  });
+  $$('[data-onboarding-step]').forEach((panel) => { panel.hidden = Number(panel.dataset.onboardingStep) !== onboarding.currentStep; });
+  $("#previousOnboardingStep").hidden = onboarding.currentStep === 1;
+  $("#nextOnboardingStep").hidden = onboarding.currentStep === 11;
+
+  $("#onboardingPrivacy").checked = onboarding.privacyAccepted;
+  renderDocumentStatus("resume", "#resumeDocumentStatus");
+  renderDocumentStatus("portfolio", "#portfolioDocumentStatus");
+  $("#agentRequestPath").textContent = onboarding.agentRequestPath;
+  $("#analysisStatus").textContent = onboarding.analysis.status === "ready"
+    ? `분석 결과를 불러왔습니다 · 사실 ${onboarding.analysis.facts.length}개 · 근거 ${onboarding.analysis.evidence.length}개 · 항목 ${onboarding.analysis.sections.length}개`
+    : "문서를 등록한 뒤 Codex·Claude Code 분석 결과를 불러와 주세요.";
+  renderAnalysisReview();
+
+  inputValue("#setupDisplayName", onboarding.profile.displayName);
+  inputValue("#setupPrimaryRole", onboarding.search.primaryRole);
+  inputValue("#setupSecondaryRoles", (onboarding.search.secondaryRoles || []).join(", "));
+  inputValue("#setupCareerStage", onboarding.profile.careerStage);
+  inputValue("#setupYearsExperience", onboarding.profile.yearsExperience);
+  inputValue("#setupCountry", onboarding.profile.country);
+  inputValue("#setupTimezone", onboarding.profile.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone);
+  inputValue("#setupCurrency", onboarding.profile.currency);
+  inputValue("#setupDesiredWork", (onboarding.search.desiredWork || []).join("\n"));
+  inputValue("#setupAvoidedWork", (onboarding.search.avoidedWork || []).join("\n"));
+  inputValue("#setupRegions", (onboarding.search.regions || []).join(", "));
+  inputValue("#setupEmploymentTypes", (onboarding.profile.employmentTypes || []).join(", "));
+  inputValue("#setupWorkModes", (onboarding.profile.workModes || []).join(", "));
+  inputValue("#setupExperienceMinimum", onboarding.search.experienceMinimum);
+  inputValue("#setupExperienceMaximum", onboarding.search.experienceMaximum);
+  inputValue("#setupSalaryMinimum", onboarding.profile.salaryMinimum);
+  inputValue("#setupSalaryTarget", onboarding.profile.salaryTarget);
+  inputValue("#setupPreferredCompanies", (onboarding.search.preferredCompanies || []).join(", "));
+  inputValue("#setupExcludedCompanies", (onboarding.search.excludedCompanies || []).join(", "));
+  inputValue("#setupPreferredIndustries", (onboarding.search.preferredIndustries || []).join(", "));
+  inputValue("#setupExcludedIndustries", (onboarding.search.excludedIndustries || []).join(", "));
+  inputValue("#setupIncludeKeywords", (onboarding.search.includeKeywords || []).join("\n"));
+  inputValue("#setupExcludeKeywords", (onboarding.search.excludeKeywords || []).join("\n"));
+  inputValue("#setupTracks", (onboarding.search.tracks || []).join(", "));
+  $("#setupPreferDirect").checked = onboarding.sources.preferDirectCompany !== false;
+  renderOnboardingSources();
+  renderOnboardingSections();
+  renderScoringDimensions();
+  inputValue("#setupReviewBelow", onboarding.search.scoring?.reviewBelow ?? 70);
+  inputValue("#setupMinimumScore", onboarding.resume.minimumScore ?? 80);
+  inputValue("#setupMaximumPages", onboarding.resume.maximumPdfPages ?? 3);
+  renderOnboardingPreview();
+}
+
+function collectAnalysisReview() {
+  const result = { facts: {}, evidence: {}, sections: {} };
+  for (const row of $$('[data-review-type]')) {
+    const type = row.dataset.reviewType;
+    const id = row.dataset.reviewId;
+    const value = row.querySelector('[data-review-value="true"]')?.value || "";
+    const decision = row.querySelector('[data-review-decision="true"]')?.value || "pending";
+    const item = (state.onboarding.analysis[type] || []).find((candidate) => candidate.id === id);
+    const field = type === "evidence" ? "description" : "value";
+    result[type][id] = { decision, [field]: item?.kind === "list" ? splitEntries(value) : value };
+  }
+  return result;
+}
+
+function collectSourceItems() {
+  const result = {};
+  for (const row of $$('[data-source-key]')) {
+    const key = row.dataset.sourceKey;
+    const existing = state.onboarding.sources.items[key];
+    const control = (field) => row.querySelector(`[data-source-field="${field}"]`);
+    result[key] = {
+      ...existing,
+      collect: Boolean(control("collect")?.checked),
+      display: Boolean(control("display")?.checked),
+      lifecycleCheck: Boolean(control("lifecycleCheck")?.checked),
+      priority: Number(control("priority")?.value || 0),
+    };
+  }
+  return result;
+}
+
+function collectScoringDimensions() {
+  return $$('[data-scoring-id]').map((row) => {
+    const existing = state.onboarding.search.scoring.dimensions.find((item) => item.id === row.dataset.scoringId);
+    return {
+      ...existing,
+      enabled: Boolean(row.querySelector('[data-scoring-field="enabled"]')?.checked),
+      weight: Number(row.querySelector('[data-scoring-field="weight"]')?.value || 0),
+    };
+  });
+}
+
+function collectOnboardingPatch(currentStep) {
+  const customPermissions = {};
+  for (const row of $$('[data-setup-custom-permission-id]')) customPermissions[row.dataset.setupCustomPermissionId] = Boolean(row.querySelector("input")?.checked);
+  return {
+    currentStep,
+    privacyAccepted: $("#onboardingPrivacy").checked,
+    profile: {
+      displayName: $("#setupDisplayName").value,
+      country: $("#setupCountry").value,
+      timezone: $("#setupTimezone").value,
+      currency: $("#setupCurrency").value,
+      careerStage: $("#setupCareerStage").value,
+      yearsExperience: numberOrNull($("#setupYearsExperience").value),
+      employmentTypes: splitEntries($("#setupEmploymentTypes").value),
+      workModes: splitEntries($("#setupWorkModes").value),
+      salaryMinimum: numberOrNull($("#setupSalaryMinimum").value),
+      salaryTarget: numberOrNull($("#setupSalaryTarget").value),
+    },
+    search: {
+      primaryRole: $("#setupPrimaryRole").value,
+      secondaryRoles: splitEntries($("#setupSecondaryRoles").value),
+      desiredWork: splitEntries($("#setupDesiredWork").value),
+      avoidedWork: splitEntries($("#setupAvoidedWork").value),
+      regions: splitEntries($("#setupRegions").value),
+      experienceMinimum: numberOrNull($("#setupExperienceMinimum").value),
+      experienceMaximum: numberOrNull($("#setupExperienceMaximum").value),
+      includeKeywords: splitEntries($("#setupIncludeKeywords").value),
+      excludeKeywords: splitEntries($("#setupExcludeKeywords").value),
+      tracks: splitEntries($("#setupTracks").value),
+      preferredCompanies: splitEntries($("#setupPreferredCompanies").value),
+      excludedCompanies: splitEntries($("#setupExcludedCompanies").value),
+      preferredIndustries: splitEntries($("#setupPreferredIndustries").value),
+      excludedIndustries: splitEntries($("#setupExcludedIndustries").value),
+      scoring: {
+        reviewBelow: numberOrNull($("#setupReviewBelow").value) ?? 70,
+        dimensions: collectScoringDimensions(),
+      },
+    },
+    sources: {
+      preferDirectCompany: $("#setupPreferDirect").checked,
+      requireNotClosed: true,
+      items: collectSourceItems(),
+    },
+    resume: {
+      editableSections: $$('[data-setup-editable-section]:checked').map((input) => input.dataset.setupEditableSection),
+      customPermissions,
+      minimumScore: numberOrNull($("#setupMinimumScore").value) ?? 80,
+      maximumPdfPages: numberOrNull($("#setupMaximumPages").value) ?? 3,
+    },
+    analysisReview: collectAnalysisReview(),
+  };
+}
+
+async function saveOnboardingDraft(step) {
+  const payload = await request("/api/onboarding", { method: "PATCH", body: JSON.stringify(collectOnboardingPatch(step)) });
+  state.onboarding = payload.onboarding;
+  state.data.onboarding = payload.onboarding;
+  renderOnboarding();
+}
+
+async function uploadOnboardingFile(kind, file) {
+  if (!file) return;
+  const form = new FormData();
+  form.append("document", file, file.name);
+  const payload = await request(`/api/onboarding/documents?kind=${encodeURIComponent(kind)}`, { method: "POST", body: form });
+  state.onboarding = payload.onboarding;
+  state.data.onboarding = payload.onboarding;
+  renderOnboarding();
+  showToast(`${kind === "resume" ? "이력서" : "포트폴리오"}를 등록했습니다.`);
+}
+
+async function deleteOnboardingFile(kind) {
+  const documentValue = state.onboarding.documents.find((item) => item.kind === kind);
+  if (!documentValue) return;
+  const payload = await request(`/api/onboarding/documents/${encodeURIComponent(documentValue.id)}`, { method: "DELETE", body: "{}" });
+  state.onboarding = payload.onboarding;
+  state.data.onboarding = payload.onboarding;
+  renderOnboarding();
+  showToast(`${kind === "resume" ? "이력서" : "포트폴리오"}를 제거했습니다.`);
+}
+
+function bindOnboardingEvents() {
+  $("#setupScoringDimensions").addEventListener("input", updateScoringWeightTotal);
+  $("#setupScoringDimensions").addEventListener("change", updateScoringWeightTotal);
+  $("#previousOnboardingStep").addEventListener("click", async () => {
+    try { await saveOnboardingDraft(Math.max(1, state.onboarding.currentStep - 1)); } catch (error) { showToast(error.message, true); }
+  });
+  $("#nextOnboardingStep").addEventListener("click", async () => {
+    try { await saveOnboardingDraft(Math.min(11, state.onboarding.currentStep + 1)); } catch (error) { showToast(error.message, true); }
+  });
+  $("#resumeDocumentInput").addEventListener("change", async (event) => {
+    try { await uploadOnboardingFile("resume", event.target.files[0]); } catch (error) { showToast(error.message, true); }
+    event.target.value = "";
+  });
+  $("#portfolioDocumentInput").addEventListener("change", async (event) => {
+    try { await uploadOnboardingFile("portfolio", event.target.files[0]); } catch (error) { showToast(error.message, true); }
+    event.target.value = "";
+  });
+  $("#resumeDocumentDelete").addEventListener("click", async () => {
+    try { await deleteOnboardingFile("resume"); } catch (error) { showToast(error.message, true); }
+  });
+  $("#portfolioDocumentDelete").addEventListener("click", async () => {
+    try { await deleteOnboardingFile("portfolio"); } catch (error) { showToast(error.message, true); }
+  });
+  $("#copyAgentPrompt").addEventListener("click", async () => {
+    const prompt = `이 저장소의 ${state.onboarding.agentRequestPath}를 읽고 등록 문서를 사실 근거만으로 분석해줘. 추측은 추가하지 말고 구조화 결과를 현재 로컬 대시보드의 /api/onboarding/analysis에 등록해줘.`;
+    try {
+      await navigator.clipboard.writeText(prompt);
+      showToast("Codex·Claude Code 요청문을 복사했습니다.");
+    } catch {
+      showToast("요청문을 복사하지 못했습니다.", true);
+    }
+  });
+  $("#saveAnalysis").addEventListener("click", async () => {
+    try {
+      const analysis = JSON.parse($("#analysisJson").value || "{}");
+      const payload = await request("/api/onboarding/analysis", { method: "PUT", body: JSON.stringify(analysis) });
+      state.onboarding = payload.onboarding;
+      state.data.onboarding = payload.onboarding;
+      renderOnboarding();
+      showToast("문서 분석 결과를 불러왔습니다.");
+    } catch (error) { showToast(error.message, true); }
+  });
+  $("#applyAnalysisSuggestions").addEventListener("click", () => {
+    const suggested = state.onboarding.analysis.suggested || {};
+    if (!$("#setupPrimaryRole").value && suggested.roles?.length) $("#setupPrimaryRole").value = suggested.roles[0];
+    if (!$("#setupSecondaryRoles").value && suggested.roles?.length > 1) $("#setupSecondaryRoles").value = suggested.roles.slice(1).join(", ");
+    if (!$("#setupIncludeKeywords").value) $("#setupIncludeKeywords").value = (suggested.includeKeywords || []).join("\n");
+    if (!$("#setupExcludeKeywords").value) $("#setupExcludeKeywords").value = (suggested.excludeKeywords || []).join("\n");
+    if (!$("#setupTracks").value) $("#setupTracks").value = (suggested.tracks || []).join(", ");
+    showToast("문서 분석 제안을 입력했습니다. 적용 전 내용을 확인해 주세요.");
+  });
+  $("#completeOnboarding").addEventListener("click", async () => {
+    try {
+      await saveOnboardingDraft(11);
+      const payload = await request("/api/onboarding/complete", { method: "POST", body: "{}" });
+      state.data = payload.dashboard;
+      state.onboarding = null;
+      state.screen = "jobs";
+      renderAll();
+      bindEvents();
+      showToast("개인 설정을 완료했습니다.");
+    } catch (error) { showToast(error.message, true); }
+  });
+}
+
+function renderResume() {
+  const resume = state.data.resume;
+  $("#resumeJobFamily").value = resume.jobFamily || "";
+  $("#resumeJobRole").value = resume.jobRole || "";
+  $("#resumeCareerType").value = resume.careerType || "new";
+  $("#resumeCareerStage").value = resume.careerStage || (resume.careerType === "experienced" ? "experienced" : "entry");
+  $("#resumeYearsExperience").value = resume.yearsExperience || "";
+  $("#resumeYearsExperience").disabled = resume.careerType !== "experienced";
+  $("#resumeSchool").value = resume.school || "";
+  $("#resumeMajor").value = resume.major || "";
+  $("#resumeHeadline").value = resume.headline || "";
+  $("#resumeSummary").value = resume.summary || "";
+  $("#resumeSkills").value = (resume.skills || []).join("\n");
+  $("#resumeHighlights").value = (resume.experienceHighlights || []).join("\n");
+  $("#resumeCertificates").value = (resume.certificates || []).join("\n");
+  $("#resumeAchievementEvidence").value = resume.achievementEvidence || "";
+  $("#resumeRepresentativeExperience").value = resume.representativeExperience || "";
+  $("#resumeDirectScope").value = resume.directScope || "";
+  $("#resumeCollaborationScope").value = resume.collaborationScope || "";
+  $("#resumeCareerDirection").value = resume.careerDirection || "";
+  const editable = new Set(resume.editableSections || []);
+  $$('[data-editable-section]').forEach((input) => { input.checked = editable.has(input.dataset.editableSection); });
+  const customContainer = $("#resumeCustomSections");
+  customContainer.replaceChildren();
+  for (const section of resume.customSections || []) {
+    const row = document.createElement("div");
+    row.className = "custom-section-row";
+    row.dataset.customSectionId = section.id;
+    row.dataset.customSectionKey = section.key;
+    row.dataset.customSectionKind = section.kind;
+    const heading = document.createElement("div");
+    heading.className = "custom-section-heading";
+    const label = document.createElement("strong");
+    label.textContent = section.label;
+    const editableLabel = document.createElement("label");
+    editableLabel.className = "inline-check";
+    const editableInput = document.createElement("input");
+    editableInput.type = "checkbox";
+    editableInput.dataset.customEditable = section.id;
+    editableInput.checked = section.editable !== false;
+    editableLabel.append(editableInput, document.createTextNode(" 공고별 수정 허용"));
+    heading.append(label, editableLabel);
+    const input = section.kind === "list" ? document.createElement("textarea") : document.createElement("textarea");
+    input.rows = 5;
+    input.dataset.customValue = section.id;
+    input.value = section.kind === "list" ? (section.value || []).join("\n") : section.value || "";
+    row.append(heading, input);
+    customContainer.append(row);
+  }
+  if (!(resume.customSections || []).length) {
+    const empty = document.createElement("p");
+    empty.className = "subtle";
+    empty.textContent = "추가 항목이 없습니다.";
+    customContainer.append(empty);
+  }
+  const evidenceContainer = $("#resumeEvidenceItems");
+  evidenceContainer.replaceChildren();
+  for (const item of resume.evidenceItems || []) {
+    const card = document.createElement("article");
+    card.className = "evidence-card";
+    const title = document.createElement("strong");
+    title.textContent = item.title;
+    const description = document.createElement("p");
+    description.textContent = item.description;
+    card.append(title, description);
+    if ((item.metrics || []).length) {
+      const metrics = document.createElement("small");
+      metrics.textContent = `확인된 수치: ${item.metrics.join(" · ")}`;
+      card.append(metrics);
+    }
+    evidenceContainer.append(card);
+  }
+  if (!(resume.evidenceItems || []).length) {
+    const empty = document.createElement("p");
+    empty.className = "subtle";
+    empty.textContent = "확인된 근거가 없습니다.";
+    evidenceContainer.append(empty);
+  }
+  $("#resumeSavedAt").textContent = resume.updatedAt ? `마지막 저장 ${formatDateTime(resume.updatedAt)}` : "";
+  for (const control of $("#resumeForm").querySelectorAll("input, textarea, select, button")) {
+    control.disabled = isReadOnlyDemo() || control.id === "resumeYearsExperience" && resume.careerType !== "experienced";
+    if (isReadOnlyDemo()) control.title = "예시 모드는 읽기 전용입니다.";
+  }
+}
+
+function renderSettings() {
+  const labels = { profile: "기본 프로필", search: "검색 전략", sources: "플랫폼", resume: "이력서" };
+  const checklist = $("#configChecklist");
+  checklist.replaceChildren();
+  for (const [key, item] of Object.entries(state.data.configStatus.files)) {
+    const row = document.createElement("div");
+    row.className = "check-row";
+    const name = document.createElement("span");
+    name.textContent = labels[key] || key;
+    const status = document.createElement("span");
+    status.className = `check-state ${item.complete ? "ready" : "pending"}`;
+    status.textContent = item.complete ? "준비됨" : "설정 필요";
+    row.append(name, status);
+    checklist.append(row);
+  }
+  const sources = $("#sourceSettings");
+  sources.replaceChildren();
+  for (const [key, item] of Object.entries(state.data.sources || {}).sort((a, b) => a[1].priority - b[1].priority)) {
+    const row = document.createElement("div");
+    row.className = "source-setting";
+    const name = document.createElement("strong");
+    name.textContent = item.label || key;
+    const status = document.createElement("span");
+    status.textContent = `${item.collect ? "수집 대상" : "수집 제외"} · ${item.display ? "화면 표시" : "화면 숨김"} · 대표 링크 순서 ${item.priority}`;
+    row.append(name, status);
+    sources.append(row);
+  }
+  const scoring = $("#scoringSettings");
+  scoring.replaceChildren();
+  const profile = state.data.scoringProfile;
+  if (!profile?.configured) {
+    const notice = document.createElement("p");
+    notice.className = "package-state hold";
+    notice.textContent = "평가 기준 설정 필요 · 공고 점수를 자동 계산하지 않습니다.";
+    scoring.append(notice);
+  } else {
+    for (const item of profile.dimensions || []) {
+      const row = document.createElement("div");
+      row.className = "source-setting";
+      const label = document.createElement("strong");
+      label.textContent = item.label;
+      const weight = document.createElement("span");
+      weight.textContent = `가중치 ${item.weight}`;
+      row.append(label, weight);
+      scoring.append(row);
+    }
+  }
+}
+
+function renderAll() {
+  if (state.data.mode === "onboarding") {
+    state.onboarding = state.data.onboarding;
+    renderOnboarding();
+    return;
+  }
+  $(".tabs").hidden = false;
+  $("#onboardingScreen").hidden = true;
+  setScreen(state.screen);
+  $("#displayName").textContent = state.data.profile.displayName || "";
+  $("#modeBadge").textContent = state.data.mode === "demo" ? "예시 데이터" : "개인 데이터";
+  $("#exampleBanner").hidden = state.data.mode !== "demo";
+  fillSelect($("#trackFilter"), [...new Set(state.data.jobs.map((job) => job.track))]);
+  fillSelect($("#platformFilter"), [...new Set(state.data.jobs.flatMap((job) => job.sources.map((source) => source.platform)))]);
+  renderJobs();
+  renderResume();
+  renderSettings();
+}
+
+function bindEvents() {
+  $$(".tab").forEach((button) => button.addEventListener("click", () => setScreen(button.dataset.screen)));
+  $("#searchInput").addEventListener("input", (event) => { state.filters.search = event.target.value; renderJobs(); });
+  $("#trackFilter").addEventListener("change", (event) => { state.filters.track = event.target.value; renderJobs(); });
+  $("#platformFilter").addEventListener("change", (event) => { state.filters.platform = event.target.value; renderJobs(); });
+  $("#statusFilter").addEventListener("change", (event) => {
+    state.filters.status = event.target.value;
+    if (["skipped", "rejected"].includes(state.filters.status) && state.filters.lifecycle === "active") {
+      state.filters.lifecycle = "all";
+      $("#lifecycleFilter").value = "all";
+      showToast("종료·제외 상태를 볼 수 있도록 공고 보기를 전체로 바꿨습니다.");
+    }
+    renderJobs();
+  });
+  $("#lifecycleFilter").addEventListener("change", (event) => {
+    state.filters.lifecycle = event.target.value;
+    if (state.filters.lifecycle === "active" && ["skipped", "rejected"].includes(state.filters.status)) {
+      state.filters.status = "";
+      $("#statusFilter").value = "";
+      showToast("활성 공고를 볼 수 있도록 지원 상태를 전체로 바꿨습니다.");
+    }
+    renderJobs();
+  });
+  $("#favoriteFilter").addEventListener("change", (event) => { state.filters.favorite = event.target.checked; renderJobs(); });
+  $("#resumeCareerType").addEventListener("change", (event) => {
+    $("#resumeYearsExperience").disabled = event.target.value !== "experienced";
+  });
+  $("#resumeForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (isReadOnlyDemo()) return;
+    const lines = (value) => value.split("\n").map((item) => item.trim()).filter(Boolean);
+    try {
+      const payload = await request("/api/resume", {
+        method: "PUT",
+        body: JSON.stringify({
+          jobFamily: $("#resumeJobFamily").value,
+          jobRole: $("#resumeJobRole").value,
+          careerType: $("#resumeCareerType").value,
+          careerStage: $("#resumeCareerStage").value,
+          yearsExperience: $("#resumeYearsExperience").value,
+          school: $("#resumeSchool").value,
+          major: $("#resumeMajor").value,
+          headline: $("#resumeHeadline").value,
+          summary: $("#resumeSummary").value,
+          skills: lines($("#resumeSkills").value),
+          experienceHighlights: lines($("#resumeHighlights").value),
+          certificates: lines($("#resumeCertificates").value),
+          achievementEvidence: $("#resumeAchievementEvidence").value,
+          representativeExperience: $("#resumeRepresentativeExperience").value,
+          directScope: $("#resumeDirectScope").value,
+          collaborationScope: $("#resumeCollaborationScope").value,
+          careerDirection: $("#resumeCareerDirection").value,
+          editableSections: $$('[data-editable-section]:checked').map((input) => input.dataset.editableSection),
+          customSections: (state.data.resume.customSections || []).map((section, index) => {
+            const row = $$('[data-custom-section-id]').find((item) => item.dataset.customSectionId === section.id);
+            const value = row?.querySelector('[data-custom-value]')?.value || "";
+            return {
+              ...section,
+              value: section.kind === "list" ? lines(value) : value,
+              displayOrder: section.displayOrder ?? index + 1,
+              editable: Boolean(row?.querySelector('[data-custom-editable]')?.checked),
+            };
+          }),
+        }),
+      });
+      state.data.resume = payload.resume;
+      renderResume();
+      showToast("이력서 기준을 저장했습니다.");
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  });
+}
+
+async function initialize() {
+  try {
+    state.data = await request("/api/dashboard");
+    renderAll();
+    if (state.data.mode === "onboarding") bindOnboardingEvents();
+    else bindEvents();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+initialize();
