@@ -172,6 +172,18 @@ test("onboarding blocks unsafe documents and completes the browser workflow with
     const pdf = Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n");
     await page.locator("#resumeDocumentInput").setInputFiles({ name: "example-resume.pdf", mimeType: "application/pdf", buffer: pdf });
     await page.getByText(/example-resume\.pdf/).waitFor();
+    const statePath = path.join(directory, "data", "private", "onboarding", "state.json");
+    const agentRequestPath = path.join(directory, "data", "private", "onboarding", "agent-request.json");
+    const beforeFailedReplacement = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    const originalResumeId = beforeFailedReplacement.documents.find((item) => item.kind === "resume").id;
+    fs.rmSync(agentRequestPath, { force: true });
+    fs.mkdirSync(agentRequestPath);
+    const failedReplacement = await upload(base, "resume", "replacement-resume.pdf", "application/pdf", pdf);
+    assert.equal(failedReplacement.response.ok, false);
+    const afterFailedReplacement = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    assert.equal(afterFailedReplacement.documents.find((item) => item.kind === "resume").id, originalResumeId);
+    assert.deepEqual(fs.readdirSync(path.join(directory, "data", "private", "documents")), [originalResumeId]);
+    fs.rmSync(agentRequestPath, { recursive: true, force: true });
     const docx = syntheticDocx();
     await page.locator("#portfolioDocumentInput").setInputFiles({ name: "example-portfolio.docx", mimeType: DOCX_MIME, buffer: docx });
     await page.getByText(/example-portfolio\.docx/).waitFor();
@@ -262,6 +274,17 @@ test("onboarding blocks unsafe documents and completes the browser workflow with
       method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(prefixedDuplicateAnalysis),
     });
     assert.equal(prefixedDuplicateResponse.status, 400);
+    const mismatchedBuiltinKind = {
+      ...analysis,
+      sections: [{
+        ...analysis.sections[0], id: "wrong-skills-kind", key: "skills", label: "핵심 기술", kind: "text", value: "Synthetic skill",
+      }],
+    };
+    const mismatchedBuiltinKindResponse = await fetch(`${base}/api/onboarding/analysis`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(mismatchedBuiltinKind),
+    });
+    assert.equal(mismatchedBuiltinKindResponse.status, 400);
+    assert.match((await mismatchedBuiltinKindResponse.json()).error, /list/);
 
     const pendingCompletion = await fetch(`${base}/api/onboarding/complete`, {
       method: "POST", headers: { "content-type": "application/json" }, body: "{}",
@@ -314,7 +337,7 @@ test("onboarding blocks unsafe documents and completes the browser workflow with
     assert.equal(invalidCompletion.status, 400);
     assert.equal(fs.existsSync(path.join(directory, "data", "job_search_operations_dev.sqlite")), false);
     assert.equal(fs.existsSync(path.join(directory, "config", "profile.yml")), false);
-    await page.getByRole("button", { name: "이전" }).click();
+    await page.getByRole("button", { name: "이전", exact: true }).click();
     await page.locator('[data-scoring-field="weight"]').first().fill("20");
     assert.equal(await page.locator("#scoringWeightTotal").innerText(), "활성 가중치 합계 100 / 100");
     await page.getByRole("button", { name: "저장하고 다음" }).click();
@@ -349,14 +372,19 @@ test("onboarding blocks unsafe documents and completes the browser workflow with
     });
     assert.equal(imported.status, 201, await imported.text());
     await page.reload({ waitUntil: "networkidle" });
+    await page.locator('[data-screen="jobs"]').click();
     await page.locator("#jobList .job-card").first().click();
+    await page.locator(".score-breakdown-row").first().waitFor();
     assert.equal(await page.locator(".score-breakdown-row").count(), 6);
+    const reviewing = page.waitForResponse((response) => /\/api\/jobs\/\d+\/state$/.test(response.url()) && response.request().method() === "PATCH");
+    await page.getByRole("button", { name: "공고 검토 시작" }).click();
+    assert.equal((await reviewing).status(), 200);
     const created = page.waitForResponse((response) => /\/api\/jobs\/\d+\/package$/.test(response.url()) && response.request().method() === "POST");
     await page.getByRole("button", { name: "공고별 작업본 만들기" }).click();
     assert.equal((await created).status(), 201);
-    await page.getByText("승인 대기", { exact: true }).waitFor();
+    await page.locator("#jobDetail .package-state", { hasText: "승인 대기" }).waitFor();
     const approved = page.waitForResponse((response) => /\/api\/packages\/\d+\/approve$/.test(response.url()), { timeout: 90000 });
-    await page.getByRole("button", { name: "문안 확인 후 PDF 생성·승인" }).click();
+    await page.getByRole("button", { name: "문안 승인·PDF 생성" }).click();
     assert.equal((await approved).status(), 200);
     const prepared = page.waitForResponse((response) => /\/api\/packages\/\d+\/prepare$/.test(response.url()));
     await page.getByRole("button", { name: "수기 제출 준비" }).click();

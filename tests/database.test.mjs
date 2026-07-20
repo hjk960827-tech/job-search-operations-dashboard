@@ -221,6 +221,18 @@ test("job import validates every field before writing a new job", () => {
         sources: [{ platform: "direct", url: ["https://user:password", "example.invalid/job"].join("@") }],
       },
       {
+        jobKey: "credential-query-url",
+        companyName: "Sample Company",
+        title: "Sample Role",
+        sources: [{ platform: "direct", url: `https://example.invalid/job?${["access", "token"].join("_")}=synthetic-value` }],
+      },
+      {
+        jobKey: "credential-fragment-url",
+        companyName: "Sample Company",
+        title: "Sample Role",
+        sources: [{ platform: "direct", url: `https://example.invalid/job#${["api", "key"].join("_")}=synthetic-value` }],
+      },
+      {
         jobKey: "invalid-source",
         companyName: "Sample Company",
         title: "Sample Role",
@@ -250,7 +262,7 @@ test("job import validates every field before writing a new job", () => {
   }
 });
 
-test("job and source lifecycle aliases are normalized to a closed enum", () => {
+test("job and source lifecycle aliases are normalized and all-closed sources close the job", () => {
   const temp = temporaryDatabase();
   try {
     initializeDatabase(temp.file, { mode: "personal" });
@@ -262,7 +274,7 @@ test("job and source lifecycle aliases are normalized to a closed enum", () => {
       status: "OPEN",
       sources: [{ platform: "direct", url: "https://example.invalid/normalized", status: "EXPIRED" }],
     });
-    assert.equal(db.prepare("SELECT lifecycle_status FROM jobs WHERE id = ?").get(jobId).lifecycle_status, "active");
+    assert.equal(db.prepare("SELECT lifecycle_status FROM jobs WHERE id = ?").get(jobId).lifecycle_status, "closed");
     assert.equal(db.prepare("SELECT lifecycle_status FROM job_sources WHERE job_id = ?").get(jobId).lifecycle_status, "closed");
     db.close();
   } finally {

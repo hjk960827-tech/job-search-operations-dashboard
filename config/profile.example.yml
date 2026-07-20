@@ -3,6 +3,11 @@ identity:
   display_name: ""
   email: ""
   phone: ""
+  address: ""
+  pdf_fields:
+    email: false
+    phone: false
+    address: false
 location:
   country: KR
   regions: []

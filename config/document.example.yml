@@ -2,3 +2,24 @@ setup_complete: false
 quality_rules:
   minimum_score: 80
   maximum_pdf_pages: 3
+  criteria:
+    - id: required_sections
+      label: 필수 항목 작성
+      enabled: true
+      weight: 35
+    - id: content_depth
+      label: 내용 구체성
+      enabled: true
+      weight: 35
+    - id: placeholder_free
+      label: 미확정 문구 제거
+      enabled: true
+      weight: 20
+    - id: job_focus_coverage
+      label: 공고 중점 항목 반영
+      enabled: true
+      weight: 10
+    - id: evidence_traceability
+      label: 수정 내용의 근거 연결
+      enabled: false
+      weight: 0

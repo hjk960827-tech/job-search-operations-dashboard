@@ -109,6 +109,21 @@ test("request guard rejects foreign origins and non-JSON personal mutations", ()
   );
   assert.equal(isApplicationJson("application/json; charset=utf-8"), true);
   assert.equal(isApplicationJson("text/json"), false);
+  assert.doesNotThrow(() => protectLocalRequest({
+    method: "POST",
+    pathname: "/api/settings/documents",
+    headers: { host: "127.0.0.1:8766", "content-type": "multipart/form-data; boundary=example" },
+    port: 8766,
+    mode: "personal",
+  }));
+  assert.throws(
+    () => protectLocalRequest({
+      method: "POST", pathname: "/api/settings/documents",
+      headers: { host: "127.0.0.1:8766", "content-type": "application/json" },
+      port: 8766, mode: "personal",
+    }),
+    (error) => error.statusCode === 415,
+  );
 });
 
 test("JSON reader maps oversized and non-object bodies to client errors", async () => {

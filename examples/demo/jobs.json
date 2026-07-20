@@ -7,6 +7,8 @@
     "location": "서울 또는 원격",
     "employmentType": "정규직",
     "status": "active",
+    "deadline": "2099-12-31",
+    "deadlineSource": "합성 데모",
     "summary": "제품 운영 기준을 정리하고 여러 팀의 실행 흐름을 연결하는 가상 공고입니다.",
     "tailoringFocus": ["headline", "summary", "experience_highlights", "collaboration_scope", "career_direction"],
     "applicationQuestions": [
@@ -19,6 +21,7 @@
         "url": "https://careers.example.invalid/jobs/product-operations",
         "externalId": "demo-direct-001",
         "status": "active",
+        "deadline": "2099-12-31",
         "confidence": 100,
         "checkedAt": "2026-01-01T00:00:00Z"
       },
@@ -27,6 +30,7 @@
         "url": "https://wanted.example.invalid/jobs/1001",
         "externalId": "demo-wanted-1001",
         "status": "active",
+        "deadline": "2099-12-30",
         "confidence": 90,
         "checkedAt": "2026-01-01T00:00:00Z"
       }
@@ -40,6 +44,8 @@
     "location": "대한민국",
     "employmentType": "정규직",
     "status": "active",
+    "deadline": "2099-11-30",
+    "deadlineSource": "합성 데모",
     "summary": "서비스 API와 데이터 흐름을 개선하는 가상 공고입니다.",
     "tailoringFocus": ["headline", "summary", "skills", "representative_experience"],
     "score": 74,
@@ -49,6 +55,7 @@
         "url": "https://linkedin.example.invalid/jobs/2001",
         "externalId": "demo-linkedin-2001",
         "status": "active",
+        "deadline": "2099-11-30",
         "confidence": 80,
         "checkedAt": "2026-01-01T00:00:00Z"
       }

@@ -134,7 +134,7 @@ test("uncheckpointed future schemas fail closed without touching database files"
   try {
     writer = new DatabaseSync(value.file);
     writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
-    writer.prepare("UPDATE app_meta SET value = '4' WHERE key = 'schema_version'").run();
+    writer.prepare("UPDATE app_meta SET value = '8' WHERE key = 'schema_version'").run();
     const before = databaseSnapshot(value.file);
     assert.ok(before.wal.size > 0);
 
@@ -161,7 +161,7 @@ test("WAL role mismatches fail closed without changing the database or creating 
 });
 
 test("future WAL schemas fail closed without changing the database or creating sidecars", () => {
-  const value = fixture({ schema_version: "4", database_role: "personal" }, { journalMode: "wal" });
+  const value = fixture({ schema_version: "12", database_role: "personal" }, { journalMode: "wal" });
   try {
     const before = databaseSnapshot(value.file);
     assert.throws(() => assertDatabaseRoleBeforeOpen(value.file, "personal"), /newer than/);
@@ -185,7 +185,7 @@ test("recorded database role is immutable", () => {
 });
 
 test("a newer schema is rejected before its role or version can be changed", () => {
-  const value = fixture({ schema_version: "4", instance_id: crypto.randomUUID() });
+  const value = fixture({ schema_version: "12", instance_id: crypto.randomUUID() });
   try {
     const before = checksum(value.file);
     assert.throws(() => assertDatabaseRoleBeforeOpen(value.file, "personal"), /newer than/);
@@ -193,7 +193,7 @@ test("a newer schema is rejected before its role or version can be changed", () 
 
     const db = new DatabaseSync(value.file);
     assert.throws(() => recordDatabaseRole(db, "personal"), /newer than/);
-    assert.equal(db.prepare("SELECT value FROM app_meta WHERE key = 'schema_version'").get().value, "4");
+    assert.equal(db.prepare("SELECT value FROM app_meta WHERE key = 'schema_version'").get().value, "12");
     assert.equal(db.prepare("SELECT value FROM app_meta WHERE key = 'database_role'").get(), undefined);
     db.close();
   } finally {
@@ -211,7 +211,7 @@ test("database initialization records an immutable role before future opens", ()
       assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
       assert.equal(fs.statSync(file).mode & 0o777, 0o600);
       const versionDb = new DatabaseSync(file, { readOnly: true });
-      assert.equal(versionDb.prepare("SELECT value FROM app_meta WHERE key = 'schema_version'").get().value, "3");
+      assert.equal(versionDb.prepare("SELECT value FROM app_meta WHERE key = 'schema_version'").get().value, "11");
       versionDb.close();
       const before = checksum(file);
       assert.throws(

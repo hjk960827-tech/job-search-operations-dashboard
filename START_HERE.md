@@ -22,6 +22,10 @@ npm run onboarding
 등록된 문서를 사실 근거만으로 분석하고 추측은 추가하지 마. 나이·생년월일은
 추출하거나 평가에 사용하지 마. 경력·기술·성과 근거·원본 위치·신뢰도와 섹션
 후보를 계약 형식으로 만들어 현재 로컬 /api/onboarding/analysis에 등록해줘.
+
+초기 설정 이후 공고 수집·문서 분석·공고별 문서 생성 queue를 처리할 때는
+`docs/COMPANION.md`를 읽고 `npm run companion -- claim --worker=local-agent`로 현재
+요청을 가져옵니다. 특정 Codex task ID나 Claude 전용 dispatcher는 사용하지 않습니다.
 지원서는 내 확인 없이 제출하지 말고 AI 토큰을 파일에 저장하지 마.
 ```
 
@@ -48,6 +52,16 @@ npm run personal
 
 Git 저장소에서는 `npm run verify`로 앱·격리·보안 검사를 모두 실행합니다. Git 정보가
 없는 압축 해제본은 `npm run verify:app`으로 앱 기능과 로컬 격리를 확인할 수 있습니다.
+
+공고 수집 결과를 한 번에 반영하려면 먼저 [`docs/COLLECTION.md`](docs/COLLECTION.md)의
+adapter 계약을 확인하세요. `npm run collection -- stage`는 운영 DB를 바꾸지 않고 차이를
+보여주며, 별도 `publish` 명령에 run ID와 체크섬을 전달해야 실제 반영됩니다.
+
+제출 뒤 결과와 D+ 후속조치, 대시보드 내부 알림은
+[`docs/OUTCOMES.md`](docs/OUTCOMES.md)의 append-only 원장 규칙을 따릅니다.
+
+대량 공고의 pagination, 선택 상세, revision cache와 제한 병렬 읽기는
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)를 참고하세요.
 
 ## 최소 import 계약
 

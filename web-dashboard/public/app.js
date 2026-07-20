@@ -1,9 +1,15 @@
 const state = {
   data: null,
   selectedJobId: null,
-  screen: "jobs",
-  filters: { search: "", track: "", platform: "", status: "", lifecycle: "active", favorite: false },
+  screen: "home",
+  filters: { search: "", track: "", platform: "", status: "", lifecycle: "active", deadline: "", sort: "score", favorite: false },
   onboarding: null,
+  outcomes: new Map(),
+  pagination: { page: 1, pageSize: 30, total: 0, totalPages: 1 },
+  facets: { tracks: [], platforms: [] },
+  cache: { etags: new Map(), details: new Map() },
+  companionReviews: new Map(),
+  personalSettings: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -31,6 +37,43 @@ const sourceStatusLabels = {
   active: "게시 중",
   closed: "마감",
   unknown: "확인 필요",
+};
+
+const companionKindLabels = {
+  collect_jobs: "공고 수집",
+  analyze_documents: "등록 문서 분석",
+  generate_package: "공고별 문서 생성",
+};
+
+const companionStatusLabels = {
+  queued: "대기 중",
+  running: "처리 중",
+  succeeded: "완료",
+  failed: "실패",
+  cancelled: "취소됨",
+};
+
+const companionReviewLabels = {
+  awaiting_review: "결과 검토 필요",
+  accepted: "반영 완료",
+  rejected: "사용 안 함",
+  superseded: "새 입력으로 대체됨",
+};
+
+const defaultDocumentQualityCriteria = [
+  { id: "required_sections", label: "필수 항목 작성", enabled: true, weight: 35, required: true },
+  { id: "content_depth", label: "내용 구체성", enabled: true, weight: 35 },
+  { id: "placeholder_free", label: "미확정 문구 제거", enabled: true, weight: 20, required: true },
+  { id: "job_focus_coverage", label: "공고 중점 항목 반영", enabled: true, weight: 10 },
+  { id: "evidence_traceability", label: "수정 내용의 근거 연결", enabled: false, weight: 0 },
+];
+
+const structuredKindLabels = {
+  experience: "경력",
+  education: "학력",
+  skill: "기술",
+  certification: "자격·인증",
+  project: "프로젝트",
 };
 
 function sourceConfidenceLabel(value) {
@@ -88,10 +131,87 @@ async function request(url, options = {}) {
   return payload;
 }
 
+async function revisionedRequest(url, { force = false } = {}) {
+  const headers = {};
+  const etag = state.cache.etags.get(url);
+  if (etag && !force) headers["if-none-match"] = etag;
+  const response = await fetch(url, { headers });
+  if (response.status === 304) return null;
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "요청을 처리하지 못했습니다.");
+  const nextEtag = response.headers.get("etag");
+  if (nextEtag) state.cache.etags.set(url, nextEtag);
+  return payload;
+}
+
+function jobPageUrl() {
+  const params = new URLSearchParams({
+    page: String(state.pagination.page),
+    pageSize: String(state.pagination.pageSize),
+  });
+  for (const [key, value] of Object.entries(state.filters)) {
+    if (value !== "" && value !== false) params.set(key, String(value));
+  }
+  return `/api/jobs?${params}`;
+}
+
+async function loadJobPage({ force = false, render = true } = {}) {
+  const payload = await revisionedRequest(jobPageUrl(), { force });
+  if (payload) {
+    state.data.jobs = payload.items;
+    state.pagination = {
+      page: payload.page,
+      pageSize: payload.pageSize,
+      total: payload.total,
+      totalPages: payload.totalPages,
+    };
+    state.facets = payload.facets || state.facets;
+    state.data.revisions = payload.revisions;
+  }
+  if (render) {
+    fillSelect($("#trackFilter"), state.facets.tracks || []);
+    fillSelect($("#platformFilter"), state.facets.platforms || []);
+    renderJobs();
+    renderPagination();
+  }
+  return payload;
+}
+
+async function loadWorkflow({ force = false } = {}) {
+  const payload = await revisionedRequest("/api/workflow", { force });
+  if (payload) {
+    state.data.workflow = payload.workflow;
+    state.data.revisions = payload.revisions;
+  }
+  renderWorkflow();
+}
+
+async function refreshDashboardData() {
+  state.cache.etags.clear();
+  state.cache.details.clear();
+  state.data = await request("/api/bootstrap");
+  await Promise.all([
+    loadJobPage({ force: true, render: false }),
+    loadWorkflow({ force: true }),
+  ]);
+  renderAll();
+}
+
+async function loadPersonalSettings() {
+  if (isReadOnlyDemo()) return;
+  const payload = await request("/api/settings");
+  state.personalSettings = payload.settings;
+  renderSettings();
+  renderDocumentManager();
+}
+
 function setScreen(screen) {
   state.screen = screen;
   $$(".tab").forEach((button) => button.classList.toggle("active", button.dataset.screen === screen));
+  $("#workflowScreen").hidden = screen !== "home";
   $("#jobsScreen").hidden = screen !== "jobs";
+  $("#inboxScreen").hidden = screen !== "inbox";
+  $("#companionScreen").hidden = screen !== "companion";
   $("#resumeScreen").hidden = screen !== "resume";
   $("#settingsScreen").hidden = screen !== "settings";
   $("#onboardingScreen").hidden = true;
@@ -112,7 +232,7 @@ function fillSelect(select, values) {
 
 function filteredJobs() {
   const query = state.filters.search.toLowerCase();
-  return state.data.jobs.filter((job) => {
+  const jobs = state.data.jobs.filter((job) => {
     if (query && !`${job.companyName} ${job.title} ${job.summary}`.toLowerCase().includes(query)) return false;
     if (state.filters.track && job.track !== state.filters.track) return false;
     if (state.filters.platform && !job.sources.some((source) => source.platform === state.filters.platform)) return false;
@@ -123,8 +243,71 @@ function filteredJobs() {
     if (state.filters.lifecycle === "active" && archived) return false;
     if (state.filters.lifecycle === "archive" && !archived) return false;
     if (state.filters.favorite && !job.application.favorite) return false;
+    if (state.filters.deadline === "urgent" && !(Number.isFinite(job.deadlineDays) && job.deadlineDays >= 0 && job.deadlineDays <= 7)) return false;
+    if (state.filters.deadline === "overdue" && !(Number.isFinite(job.deadlineDays) && job.deadlineDays < 0)) return false;
+    if (state.filters.deadline === "none" && job.deadline) return false;
     return true;
   });
+  return jobs.sort((left, right) => {
+    if (state.filters.sort === "deadline") {
+      const leftValue = Number.isFinite(left.deadlineDays) ? left.deadlineDays : Number.MAX_SAFE_INTEGER;
+      const rightValue = Number.isFinite(right.deadlineDays) ? right.deadlineDays : Number.MAX_SAFE_INTEGER;
+      return leftValue - rightValue || left.companyName.localeCompare(right.companyName);
+    }
+    if (state.filters.sort === "recent") {
+      const latest = (job) => Math.max(0, ...(job.sources || []).map((source) => Date.parse(source.checkedAt) || 0));
+      return latest(right) - latest(left) || left.companyName.localeCompare(right.companyName);
+    }
+    return Number(right.score ?? -1) - Number(left.score ?? -1) || left.companyName.localeCompare(right.companyName);
+  });
+}
+
+function deadlineLabel(job) {
+  if (!job.deadline) return "";
+  if (job.deadlineDays < 0) return `마감 ${Math.abs(job.deadlineDays)}일 경과`;
+  if (job.deadlineDays === 0) return "D-Day";
+  return `D-${job.deadlineDays}`;
+}
+
+async function navigateToJob(jobId, focus = "", { preserveFilters = false } = {}) {
+  const id = Number(jobId);
+  const summary = state.data.jobs.find((item) => item.id === id);
+  state.selectedJobId = id;
+  if (!preserveFilters) {
+    state.filters = { search: "", track: "", platform: "", status: "", lifecycle: "all", deadline: "", sort: "score", favorite: false };
+    state.pagination.page = 1;
+    syncFilterControls();
+    loadJobPage({ force: true }).catch((error) => showToast(error.message, true));
+  }
+  setScreen("jobs");
+  renderJobs();
+  const detail = $("#jobDetail");
+  detail.replaceChildren();
+  const loading = document.createElement("div");
+  loading.className = "empty-state";
+  const title = document.createElement("h3");
+  title.textContent = summary ? `${summary.companyName} · ${summary.title}` : "공고 상세 불러오는 중";
+  const copy = document.createElement("p");
+  copy.textContent = "선택한 공고의 출처와 지원 문서를 불러오고 있습니다.";
+  loading.append(title, copy);
+  detail.append(loading);
+  window.history.replaceState(null, "", `#jobs?job=${id}${focus ? `&focus=${encodeURIComponent(focus)}` : ""}`);
+  try {
+    const url = `/api/jobs/${id}`;
+    const payload = await revisionedRequest(url);
+    if (payload) state.cache.details.set(id, payload.detail);
+    const job = payload?.detail || state.cache.details.get(id);
+    if (!job) throw new Error("공고 상세 캐시를 다시 불러와야 합니다.");
+    if (state.selectedJobId !== id) return;
+    renderDetail(job.id, job);
+  } catch (error) {
+    if (state.selectedJobId === id) showToast(error.message, true);
+    return;
+  }
+  window.setTimeout(() => {
+    const target = focus === "outcomes" ? $("#jobDetail .outcome-panel") : $("#jobDetail");
+    target?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, 0);
 }
 
 function createJobCard(job) {
@@ -146,6 +329,25 @@ function createJobCard(job) {
     span.textContent = value;
     meta.append(span);
   }
+  if (job.deadline) {
+    const span = document.createElement("span");
+    span.className = job.deadlineDays !== null && job.deadlineDays <= 7 ? "deadline-urgent" : "";
+    span.textContent = `${deadlineLabel(job)} · ${job.deadline}`;
+    meta.append(span);
+  }
+  if (job.discovery?.isNew) {
+    const span = document.createElement("span");
+    span.className = "discovery-badge new";
+    span.textContent = "새 공고";
+    meta.append(span);
+  }
+  if (job.discovery?.isReopened) {
+    const span = document.createElement("span");
+    span.className = "discovery-badge reopened";
+    span.textContent = `재오픈${job.discovery.reopenCount > 1 ? ` ${job.discovery.reopenCount}회` : ""}`;
+    span.title = job.discovery.reopenedAt ? `최근 재오픈 ${formatDateTime(job.discovery.reopenedAt)}` : "마감 후 다시 활성화된 공고";
+    meta.append(span);
+  }
   body.append(company, title, meta);
   const score = document.createElement("span");
   score.className = `job-score${job.score === null ? " empty" : ""}`;
@@ -156,17 +358,709 @@ function createJobCard(job) {
   }
   score.textContent = job.score === null ? "–" : Math.round(job.score);
   button.append(body, score);
-  button.addEventListener("click", () => {
-    state.selectedJobId = job.id;
-    renderJobs();
-    renderDetail(job.id);
-  });
+  button.addEventListener("click", () => navigateToJob(job.id, job.workflow?.stage || "", { preserveFilters: true }));
   return button;
+}
+
+function renderWorkflow() {
+  const overview = state.data.workflow || { counts: {}, buckets: {}, total: 0 };
+  $("#workflowCount").textContent = `${overview.total || 0}건`;
+  $("#workflowReviewCount").textContent = overview.counts?.review || 0;
+  $("#workflowQualityCount").textContent = overview.counts?.quality || 0;
+  $("#workflowApprovalCount").textContent = overview.counts?.approval || 0;
+  $("#workflowSubmissionCount").textContent = overview.counts?.submission || 0;
+  $("#workflowFollowUpCount").textContent = overview.counts?.followUp || 0;
+  const container = $("#workflowQueues");
+  container.replaceChildren();
+  const followUpSection = document.createElement("section");
+  followUpSection.className = "card workflow-queue follow-up-workbox";
+  const followUpHeading = document.createElement("div");
+  followUpHeading.className = "workflow-queue-heading";
+  const followUpHeadingText = document.createElement("div");
+  const followUpTitle = document.createElement("h3");
+  followUpTitle.textContent = "예정 후속조치";
+  const followUpDescription = document.createElement("p");
+  followUpDescription.textContent = "제출 이후 오늘 해야 하거나 예정된 확인 작업입니다.";
+  followUpHeadingText.append(followUpTitle, followUpDescription);
+  const followUpCount = document.createElement("span");
+  followUpCount.className = "count-pill";
+  followUpCount.textContent = `${overview.followUps?.length || 0}건`;
+  followUpHeading.append(followUpHeadingText, followUpCount);
+  const followUpList = document.createElement("div");
+  followUpList.className = "workflow-task-list";
+  for (const item of overview.followUps || []) {
+    const row = document.createElement("article");
+    row.className = `workflow-task${Number(item.daysUntil) < 0 ? " overdue" : ""}`;
+    const copy = document.createElement("div");
+    const company = document.createElement("span");
+    company.textContent = item.companyName;
+    const title = document.createElement("strong");
+    title.textContent = item.title;
+    const due = document.createElement("small");
+    due.textContent = `${outcomeDateLabel(item.daysUntil)} · ${item.dueAt.slice(0, 10)} · ${item.jobTitle}`;
+    copy.append(company, title, due);
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "secondary-button";
+    open.textContent = "결과·후속조치 열기";
+    open.addEventListener("click", () => navigateToJob(item.jobId, "outcomes"));
+    row.append(copy, open);
+    followUpList.append(row);
+  }
+  if (!(overview.followUps || []).length) {
+    const empty = document.createElement("p");
+    empty.className = "workflow-empty";
+    empty.textContent = "예정된 후속조치가 없습니다.";
+    followUpList.append(empty);
+  }
+  followUpSection.append(followUpHeading, followUpList);
+  container.append(followUpSection);
+  const definitions = [
+    ["review", "공고 검토", "새 공고를 확인하고 지원 검토 여부를 정합니다."],
+    ["quality", "보완 필요", "작업본 생성, 문안 수정 또는 기준 변경 반영이 필요합니다."],
+    ["approval", "승인 대기", "문안을 확인하고 승인된 PDF를 생성합니다."],
+    ["submission", "제출 준비", "제출본 동결 또는 제출 완료 기록이 필요합니다."],
+  ];
+  for (const [bucket, titleText, descriptionText] of definitions) {
+    const section = document.createElement("section");
+    section.className = "card workflow-queue";
+    const heading = document.createElement("div");
+    heading.className = "workflow-queue-heading";
+    const headingText = document.createElement("div");
+    const title = document.createElement("h3");
+    title.textContent = titleText;
+    const description = document.createElement("p");
+    description.textContent = descriptionText;
+    headingText.append(title, description);
+    const count = document.createElement("span");
+    count.className = "count-pill";
+    count.textContent = `${overview.buckets?.[bucket]?.length || 0}건`;
+    heading.append(headingText, count);
+    const list = document.createElement("div");
+    list.className = "workflow-task-list";
+    const items = overview.buckets?.[bucket] || [];
+    for (const item of items) {
+      const row = document.createElement("article");
+      row.className = "workflow-task";
+      row.dataset.jobId = item.jobId;
+      row.dataset.workflowStage = item.workflow.stage;
+      const copy = document.createElement("div");
+      const company = document.createElement("span");
+      company.textContent = item.companyName;
+      const jobTitle = document.createElement("strong");
+      jobTitle.textContent = item.title;
+      const stage = document.createElement("small");
+      stage.textContent = `${item.workflow.label} · ${item.workflow.description}`;
+      copy.append(company, jobTitle, stage);
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "secondary-button";
+      open.textContent = item.workflow.nextAction?.label || "공고 열기";
+      open.addEventListener("click", () => navigateToJob(item.jobId, item.workflow.stage));
+      row.append(copy, open);
+      list.append(row);
+    }
+    if (!items.length) {
+      const empty = document.createElement("p");
+      empty.className = "workflow-empty";
+      empty.textContent = "현재 해당 작업이 없습니다.";
+      list.append(empty);
+    }
+    section.append(heading, list);
+    container.append(section);
+  }
+}
+
+async function createCompanionRequest(kind, extra = {}) {
+  try {
+    const payload = await request("/api/companion/tasks", {
+      method: "POST",
+      body: JSON.stringify({ kind, ...extra }),
+    });
+    state.data.companionTasks = payload.tasks;
+    renderCompanion();
+    setScreen("companion");
+    showToast(payload.deduplicated ? "같은 활성 요청이 있어 기존 작업을 열었습니다." : "로컬 에이전트 작업을 만들었습니다.");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function updateCompanionTask(taskId, action) {
+  try {
+    const payload = await request(`/api/companion/tasks/${encodeURIComponent(taskId)}/${action}`, { method: "POST", body: "{}" });
+    state.data.companionTasks = payload.tasks;
+    renderCompanion();
+    showToast(action === "retry" ? "실패한 작업을 다시 대기열에 넣었습니다." : "작업을 취소했습니다.");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function prepareCompanionReview(taskId) {
+  try {
+    const payload = await request(`/api/companion/tasks/${encodeURIComponent(taskId)}/prepare-review`, { method: "POST", body: "{}" });
+    state.companionReviews.set(taskId, payload.review);
+    state.data.companionTasks = payload.tasks;
+    renderCompanion();
+  } catch (error) { showToast(error.message, true); }
+}
+
+function companionDecisionRows(task, review) {
+  const panel = document.createElement("div");
+  panel.className = "companion-review-panel";
+  panel.dataset.companionReviewTask = task.id;
+  if (task.kind === "collect_jobs") {
+    const counts = review.preview?.counts || {};
+    const summary = document.createElement("p");
+    summary.textContent = `총 ${counts.total || 0}건 · 새 공고 ${counts.create || 0}건 · 변경 ${counts.update || 0}건 · 동일 ${counts.unchanged || 0}건`;
+    panel.append(summary);
+    for (const item of review.preview?.diff || []) {
+      const row = document.createElement("small");
+      row.textContent = `${item.action === "create" ? "추가" : item.action === "update" ? "변경" : "동일"} · ${item.jobKey}`;
+      panel.append(row);
+    }
+    return panel;
+  }
+  const groups = task.kind === "analyze_documents"
+    ? [["facts", "확인된 사실"], ["evidence", "경력 근거"], ["sections", "이력서 항목"]]
+    : [["sections", "맞춤 문서 항목"]];
+  const source = task.kind === "analyze_documents" ? review.preview?.result || {} : {
+    sections: (review.preview?.sections || []).map((item) => ({ ...item, id: item.key, value: item.after })),
+  };
+  for (const [type, label] of groups) {
+    const heading = document.createElement("strong");
+    heading.textContent = label;
+    panel.append(heading);
+    for (const item of source[type] || []) {
+      const id = String(item.id || item.key || "");
+      const saved = review.decisions?.[type]?.[id] || { decision: "pending" };
+      const row = document.createElement("div");
+      row.className = "analysis-review-row";
+      row.dataset.resultType = type;
+      row.dataset.resultId = id;
+      const top = document.createElement("div");
+      top.className = "analysis-review-heading";
+      const title = document.createElement("span");
+      title.textContent = item.label || item.title || item.key || id;
+      const decision = document.createElement("select");
+      decision.dataset.resultDecision = "true";
+      for (const [value, text] of [["pending", "확인 필요"], ["use", "사용"], ["edit", "수정 후 사용"], ["exclude", "제외"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = text;
+        decision.append(option);
+      }
+      decision.value = saved.decision || "pending";
+      top.append(title, decision);
+      const editor = document.createElement("textarea");
+      editor.dataset.resultValue = "true";
+      const original = type === "facts" ? item.value : type === "evidence" ? item.description : item.value;
+      const edited = type === "facts" ? saved.value : type === "evidence" ? saved.description : saved.value;
+      editor.value = Array.isArray(edited ?? original) ? (edited ?? original).join("\n") : edited ?? original ?? "";
+      editor.rows = 3;
+      const sourceNote = document.createElement("small");
+      const references = item.sourceRefs || (item.sourceDocumentId ? [{ documentId: item.sourceDocumentId, locator: item.sourceLocator }] : []);
+      sourceNote.textContent = references.length
+        ? `근거: ${references.map((ref) => typeof ref === "string" ? ref : `${ref.documentId || ref.id} · ${ref.locator || ref.sourceLocator}`).join(" / ")}`
+        : "근거 연결 없음";
+      row.append(top, editor, sourceNote);
+      panel.append(row);
+    }
+  }
+  return panel;
+}
+
+function collectCompanionDecisions(taskId) {
+  const panel = document.querySelector(`[data-companion-review-task="${taskId}"]`);
+  const decisions = {};
+  for (const row of panel?.querySelectorAll("[data-result-type]") || []) {
+    const type = row.dataset.resultType;
+    const id = row.dataset.resultId;
+    decisions[type] ||= {};
+    const decision = row.querySelector('[data-result-decision="true"]').value;
+    const value = row.querySelector('[data-result-value="true"]').value;
+    const entry = { decision };
+    if (decision === "edit") {
+      if (type === "evidence") entry.description = value;
+      else entry.value = value.includes("\n") ? value.split("\n").map((line) => line.trim()).filter(Boolean) : value;
+    }
+    decisions[type][id] = entry;
+  }
+  return decisions;
+}
+
+async function applyCompanionReview(task) {
+  try {
+    if (task.kind !== "collect_jobs") {
+      const saved = await request(`/api/companion/tasks/${encodeURIComponent(task.id)}/review`, {
+        method: "PATCH", body: JSON.stringify({ decisions: collectCompanionDecisions(task.id) }),
+      });
+      state.companionReviews.set(task.id, saved.review);
+    }
+    const payload = await request(`/api/companion/tasks/${encodeURIComponent(task.id)}/apply-review`, { method: "POST", body: "{}" });
+    state.companionReviews.set(task.id, payload.review);
+    state.data.companionTasks = payload.tasks;
+    renderCompanion();
+    showToast("검토한 결과를 로컬 데이터에 반영했습니다.");
+    await refreshDashboardData();
+  } catch (error) { showToast(error.message, true); }
+}
+
+async function rejectCompanionReview(taskId) {
+  try {
+    const payload = await request(`/api/companion/tasks/${encodeURIComponent(taskId)}/reject-review`, {
+      method: "POST", body: JSON.stringify({ note: "사용자가 결과를 사용하지 않기로 선택했습니다." }),
+    });
+    state.companionReviews.set(taskId, payload.review);
+    state.data.companionTasks = payload.tasks;
+    renderCompanion();
+    showToast("이 결과는 로컬 데이터에 반영하지 않습니다.");
+  } catch (error) { showToast(error.message, true); }
+}
+
+function renderCompanion() {
+  const tasks = state.data.companionTasks || [];
+  $("#companionTaskCount").textContent = `${tasks.length}건`;
+  const list = $("#companionTaskList");
+  list.replaceChildren();
+  for (const task of tasks) {
+    const card = document.createElement("article");
+    card.className = "card companion-task";
+    card.dataset.companionTaskId = task.id;
+    const heading = document.createElement("div");
+    heading.className = "companion-task-heading";
+    const title = document.createElement("strong");
+    title.textContent = companionKindLabels[task.kind] || task.kind;
+    const status = document.createElement("span");
+    const reviewStatus = task.review?.status;
+    status.className = `package-state ${reviewStatus === "accepted" ? "ready" : reviewStatus && reviewStatus !== "awaiting_review" || ["failed", "cancelled"].includes(task.status) ? "hold" : ""}`;
+    status.textContent = reviewStatus ? companionReviewLabels[reviewStatus] || reviewStatus : companionStatusLabels[task.status] || task.status;
+    heading.append(title, status);
+    const detail = document.createElement("p");
+    detail.textContent = `시도 ${task.attemptCount}/${task.maxAttempts} · 요청 파일 ${task.requestPath}`;
+    card.append(heading, detail);
+    if (task.error) {
+      const error = document.createElement("p");
+      error.className = "companion-error";
+      error.textContent = `${task.error.code} · ${task.error.message}`;
+      card.append(error);
+    }
+    if (task.status === "running" && task.leaseExpiresAt) {
+      const progress = document.createElement("small");
+      progress.textContent = `lease 만료 ${formatDateTime(task.leaseExpiresAt)} · heartbeat로 연장됩니다.`;
+      card.append(progress);
+    }
+    const actions = document.createElement("div");
+    actions.className = "companion-task-actions";
+    if (["queued", "running"].includes(task.status)) {
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "secondary-button";
+      cancel.textContent = "작업 취소";
+      cancel.addEventListener("click", () => updateCompanionTask(task.id, "cancel"));
+      protectDemoControl(cancel);
+      actions.append(cancel);
+    }
+    if (task.status === "failed" && task.attemptCount < task.maxAttempts) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "primary-button";
+      retry.textContent = "다시 시도";
+      retry.addEventListener("click", () => updateCompanionTask(task.id, "retry"));
+      protectDemoControl(retry);
+      actions.append(retry);
+    }
+    if (task.status === "succeeded" && task.review?.status === "awaiting_review") {
+      const review = state.companionReviews.get(task.id);
+      if (!review?.preview?.kind) {
+        const prepare = document.createElement("button");
+        prepare.type = "button";
+        prepare.className = "primary-button";
+        prepare.textContent = "결과 미리보기";
+        prepare.addEventListener("click", () => prepareCompanionReview(task.id));
+        actions.append(prepare);
+      } else {
+        card.append(companionDecisionRows(task, review));
+        const apply = document.createElement("button");
+        apply.type = "button";
+        apply.className = "primary-button";
+        apply.textContent = "검토 결과 반영";
+        apply.addEventListener("click", () => applyCompanionReview(task));
+        const reject = document.createElement("button");
+        reject.type = "button";
+        reject.className = "secondary-button";
+        reject.textContent = "사용하지 않음";
+        reject.addEventListener("click", () => rejectCompanionReview(task.id));
+        actions.append(apply, reject);
+      }
+    }
+    if (actions.childElementCount) card.append(actions);
+    list.append(card);
+  }
+  if (!tasks.length) {
+    const empty = document.createElement("div");
+    empty.className = "card empty-state";
+    const title = document.createElement("h3");
+    title.textContent = "아직 로컬 에이전트 작업이 없습니다";
+    const copy = document.createElement("p");
+    copy.textContent = "공고 수집·문서 분석 요청을 만들거나 공고 상세에서 문서 생성 요청을 추가해 주세요.";
+    empty.append(title, copy);
+    list.append(empty);
+  }
+  protectDemoControl($("#queueJobCollection"));
+  protectDemoControl($("#queueDocumentAnalysis"));
+}
+
+function renderInbox() {
+  const inbox = state.data.inbox || { items: [], unreadCount: 0 };
+  $("#inboxCount").textContent = `${inbox.items.length}건`;
+  const badge = $("#inboxUnreadBadge");
+  badge.textContent = String(inbox.unreadCount || 0);
+  badge.hidden = !inbox.unreadCount;
+  const list = $("#inboxList");
+  list.replaceChildren();
+  for (const item of inbox.items) {
+    const card = document.createElement("article");
+    card.className = `card inbox-item${item.read ? " read" : " unread"}`;
+    card.dataset.notificationId = item.id;
+    const copy = document.createElement("div");
+    const heading = document.createElement("strong");
+    heading.textContent = item.title;
+    const body = document.createElement("p");
+    body.textContent = item.body || `${item.companyName} · ${item.jobTitle}`;
+    const time = document.createElement("small");
+    time.textContent = formatDateTime(item.createdAt);
+    copy.append(heading, body, time);
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "secondary-button";
+    open.textContent = item.read ? "공고 열기" : "확인하고 열기";
+    open.addEventListener("click", async () => {
+      try {
+        if (!item.read) {
+          const payload = await request(`/api/inbox/${item.id}/read`, { method: "POST", body: "{}" });
+          state.data.inbox = payload.inbox;
+          renderInbox();
+        }
+        navigateToJob(item.jobId, "outcomes");
+      } catch (error) { showToast(error.message, true); }
+    });
+    protectDemoControl(open);
+    card.append(copy, open);
+    list.append(card);
+  }
+  if (!inbox.items.length) {
+    const empty = document.createElement("div");
+    empty.className = "card empty-state";
+    const title = document.createElement("h3");
+    title.textContent = "아직 로컬 알림이 없습니다";
+    const copy = document.createElement("p");
+    copy.textContent = "제출 뒤 결과나 후속조치를 기록하면 이곳에만 알림이 쌓입니다.";
+    empty.append(title, copy);
+    list.append(empty);
+  }
+}
+
+function outcomeDateLabel(days) {
+  if (!Number.isFinite(days)) return "";
+  if (days === 0) return "오늘";
+  return days > 0 ? `D-${days}` : `${Math.abs(days)}일 지남`;
+}
+
+function applyOutcomePayload(payload, jobId) {
+  if (payload.inbox) state.data.inbox = payload.inbox;
+  if (payload.outcomes) state.outcomes.set(Number(jobId), payload.outcomes);
+  renderInbox();
+  applyJobs(payload, Number(jobId));
+}
+
+function renderOutcomePanel(panel, job, outcomes) {
+  panel.replaceChildren();
+  const heading = document.createElement("div");
+  heading.className = "panel-title-row";
+  const copy = document.createElement("div");
+  const title = document.createElement("h4");
+  title.textContent = "지원 결과·후속조치";
+  const description = document.createElement("p");
+  description.className = "subtle";
+  description.textContent = "제출 뒤 결과를 덮어쓰지 않고 시간순으로 보관합니다.";
+  copy.append(title, description);
+  const pending = document.createElement("span");
+  pending.className = "count-pill";
+  pending.textContent = `예정 ${outcomes.pendingCount || 0}건`;
+  heading.append(copy, pending);
+  panel.append(heading);
+
+  const events = document.createElement("div");
+  events.className = "outcome-events";
+  for (const event of outcomes.events || []) {
+    const row = document.createElement("article");
+    row.className = "outcome-row";
+    row.dataset.outcomeEventId = event.id;
+    const eventCopy = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = event.correctionOfEventId ? `정정 · ${event.label}` : event.label;
+    const summary = document.createElement("p");
+    summary.textContent = event.summary || "별도 메모 없음";
+    const meta = document.createElement("small");
+    const checksum = event.evidence.checksum ? ` · SHA-256 ${event.evidence.checksum.slice(0, 12)}…` : "";
+    const evidence = event.evidence.kind === "none" ? "증빙 없음" : `증빙 · ${event.evidence.label}${checksum}`;
+    const correction = event.correctionOfEventId ? ` · 원본 #${event.correctionOfEventId} 정정 사유: ${event.correctionReason}` : event.corrected ? " · 이후 정정 기록 있음" : "";
+    meta.textContent = `${formatDateTime(event.occurredAt)} · ${evidence}${correction}`;
+    eventCopy.append(label, summary, meta);
+    row.append(eventCopy);
+    if (!isReadOnlyDemo()) {
+      const details = document.createElement("details");
+      details.className = "outcome-correction";
+      const toggle = document.createElement("summary");
+      toggle.textContent = "이 기록 정정";
+      const form = document.createElement("form");
+      form.className = "outcome-form correction-form";
+      const type = document.createElement("select");
+      for (const item of state.data.outcomeEventTypes || []) {
+        const option = document.createElement("option");
+        option.value = item.value;
+        option.textContent = item.label;
+        option.selected = item.value === event.type;
+        type.append(option);
+      }
+      const occurredAt = document.createElement("input");
+      occurredAt.type = "datetime-local";
+      occurredAt.value = new Date(new Date(event.occurredAt).getTime() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+      const correctedSummary = document.createElement("input");
+      correctedSummary.maxLength = 2000;
+      correctedSummary.value = event.summary;
+      correctedSummary.placeholder = "정정된 결과 메모";
+      const reason = document.createElement("input");
+      reason.required = true;
+      reason.maxLength = 1000;
+      reason.placeholder = "정정 사유 · 필수";
+      const evidenceKind = document.createElement("select");
+      for (const [value, textValue] of [["none", "증빙 없음"], ["manual_note", "직접 확인"], ["portal", "채용 사이트"], ["email", "이메일"], ["document", "문서 체크섬"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = textValue;
+        option.selected = value === event.evidence.kind;
+        evidenceKind.append(option);
+      }
+      const evidenceLabel = document.createElement("input");
+      evidenceLabel.maxLength = 500;
+      evidenceLabel.value = event.evidence.label;
+      evidenceLabel.placeholder = "증빙 설명";
+      const evidenceChecksum = document.createElement("input");
+      evidenceChecksum.maxLength = 64;
+      evidenceChecksum.value = event.evidence.checksum;
+      evidenceChecksum.placeholder = "문서 SHA-256";
+      const submit = document.createElement("button");
+      submit.type = "submit";
+      submit.className = "secondary-button";
+      submit.textContent = "정정 기록 추가";
+      form.append(type, occurredAt, correctedSummary, reason, evidenceKind, evidenceLabel, evidenceChecksum, submit);
+      form.addEventListener("submit", async (submitEvent) => {
+        submitEvent.preventDefault();
+        try {
+          const payload = await request(`/api/jobs/${job.id}/outcomes/${event.id}/corrections`, {
+            method: "POST",
+            body: JSON.stringify({
+              type: type.value,
+              occurredAt: new Date(occurredAt.value).toISOString(),
+              summary: correctedSummary.value,
+              reason: reason.value,
+              evidence: evidenceKind.value === "none"
+                ? { kind: "none" }
+                : { kind: evidenceKind.value, label: evidenceLabel.value, checksum: evidenceChecksum.value },
+            }),
+          });
+          applyOutcomePayload(payload, job.id);
+          showToast(payload.deduplicated ? "같은 정정 기록이 이미 있습니다." : "원본을 보존하고 정정 기록을 추가했습니다.");
+        } catch (error) { showToast(error.message, true); }
+      });
+      details.append(toggle, form);
+      row.append(details);
+    }
+    events.append(row);
+  }
+  if (!(outcomes.events || []).length) {
+    const empty = document.createElement("p");
+    empty.className = "subtle";
+    empty.textContent = outcomes.eligible ? "아직 기록된 지원 결과가 없습니다." : "제출 완료를 먼저 기록하면 결과 원장을 사용할 수 있습니다.";
+    events.append(empty);
+  }
+  panel.append(events);
+
+  if (outcomes.eligible && !isReadOnlyDemo()) {
+    const resultForm = document.createElement("form");
+    resultForm.className = "outcome-form";
+    const resultType = document.createElement("select");
+    resultType.name = "resultType";
+    for (const item of state.data.outcomeEventTypes || []) {
+      const option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = item.label;
+      resultType.append(option);
+    }
+    const occurredAt = document.createElement("input");
+    occurredAt.type = "datetime-local";
+    occurredAt.name = "occurredAt";
+    occurredAt.value = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+    const summary = document.createElement("input");
+    summary.name = "summary";
+    summary.maxLength = 2000;
+    summary.placeholder = "결과 메모 · 선택";
+    const evidenceKind = document.createElement("select");
+    evidenceKind.name = "evidenceKind";
+    for (const [value, label] of [["none", "증빙 없음"], ["manual_note", "직접 확인"], ["portal", "채용 사이트"], ["email", "이메일"], ["document", "문서 체크섬"]]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      evidenceKind.append(option);
+    }
+    const evidenceLabel = document.createElement("input");
+    evidenceLabel.name = "evidenceLabel";
+    evidenceLabel.maxLength = 500;
+    evidenceLabel.placeholder = "증빙 설명 · 종류 선택 시 필수";
+    const evidenceChecksum = document.createElement("input");
+    evidenceChecksum.name = "evidenceChecksum";
+    evidenceChecksum.maxLength = 64;
+    evidenceChecksum.placeholder = "문서 SHA-256 · 문서 선택 시 필수";
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.className = "primary-button";
+    submit.textContent = "결과 추가";
+    resultForm.append(resultType, occurredAt, summary, evidenceKind, evidenceLabel, evidenceChecksum, submit);
+    resultForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const payload = await request(`/api/jobs/${job.id}/outcomes`, {
+          method: "POST",
+          body: JSON.stringify({
+            type: resultType.value,
+            occurredAt: new Date(occurredAt.value).toISOString(),
+            summary: summary.value,
+            evidence: evidenceKind.value === "none"
+              ? { kind: "none" }
+              : { kind: evidenceKind.value, label: evidenceLabel.value, checksum: evidenceChecksum.value },
+          }),
+        });
+        applyOutcomePayload(payload, job.id);
+        showToast(payload.deduplicated ? "같은 결과가 이미 기록되어 있습니다." : "지원 결과를 원장에 추가했습니다.");
+      } catch (error) { showToast(error.message, true); }
+    });
+    panel.append(resultForm);
+  }
+
+  const followUps = document.createElement("div");
+  followUps.className = "follow-up-list";
+  for (const followUp of outcomes.followUps || []) {
+    const row = document.createElement("article");
+    row.className = `follow-up-row ${followUp.status}`;
+    row.dataset.followUpId = followUp.id;
+    const content = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = followUp.title;
+    const meta = document.createElement("small");
+    meta.textContent = `${outcomeDateLabel(followUp.daysUntil)} · ${formatDateTime(followUp.dueAt)} · ${followUp.status === "pending" ? "예정" : followUp.status === "completed" ? "완료" : "취소"}`;
+    content.append(label, meta);
+    row.append(content);
+    if (followUp.status === "pending" && !isReadOnlyDemo()) {
+      const actions = document.createElement("div");
+      actions.className = "follow-up-actions";
+      for (const [action, actionLabel] of [["complete", "완료"], ["cancel", "취소"]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "secondary-button";
+        button.textContent = actionLabel;
+        button.addEventListener("click", async () => {
+          try {
+            const payload = await request(`/api/follow-ups/${followUp.id}/${action}`, { method: "POST", body: "{}" });
+            applyOutcomePayload(payload, job.id);
+          } catch (error) { showToast(error.message, true); }
+        });
+        actions.append(button);
+      }
+      row.append(actions);
+    }
+    followUps.append(row);
+  }
+  panel.append(followUps);
+
+  if (outcomes.eligible && !isReadOnlyDemo()) {
+    const followForm = document.createElement("form");
+    followForm.className = "follow-up-form";
+    const followTitle = document.createElement("input");
+    followTitle.name = "followTitle";
+    followTitle.required = true;
+    followTitle.maxLength = 200;
+    followTitle.placeholder = "후속조치 제목";
+    const dueAt = document.createElement("input");
+    dueAt.type = "date";
+    dueAt.name = "dueAt";
+    dueAt.value = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    const sourceEvent = document.createElement("select");
+    sourceEvent.name = "sourceEvent";
+    const direct = document.createElement("option");
+    direct.value = "";
+    direct.textContent = "날짜 직접 지정";
+    sourceEvent.append(direct);
+    for (const item of outcomes.events || []) {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = `${item.label} 기준`;
+      sourceEvent.append(option);
+    }
+    const offset = document.createElement("input");
+    offset.type = "number";
+    offset.name = "offsetDays";
+    offset.min = "0";
+    offset.max = "365";
+    offset.placeholder = "D+ 일수";
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.className = "secondary-button";
+    submit.textContent = "후속조치 추가";
+    followForm.append(followTitle, dueAt, sourceEvent, offset, submit);
+    sourceEvent.addEventListener("change", () => {
+      const anchored = Boolean(sourceEvent.value);
+      dueAt.disabled = anchored;
+      offset.required = anchored;
+    });
+    followForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const anchored = Boolean(sourceEvent.value);
+        const body = anchored
+          ? { title: followTitle.value, sourceEventId: Number(sourceEvent.value), offsetDays: Number(offset.value) }
+          : { title: followTitle.value, dueAt: dueAt.value };
+        const payload = await request(`/api/jobs/${job.id}/follow-ups`, { method: "POST", body: JSON.stringify(body) });
+        applyOutcomePayload(payload, job.id);
+        showToast(payload.deduplicated ? "같은 후속조치가 이미 예정되어 있습니다." : "후속조치를 추가했습니다.");
+      } catch (error) { showToast(error.message, true); }
+    });
+    panel.append(followForm);
+  }
+}
+
+async function loadJobOutcomes(job, panel) {
+  try {
+    const cached = state.outcomes.get(Number(job.id));
+    if (cached) renderOutcomePanel(panel, job, cached);
+    const payload = await request(`/api/jobs/${job.id}/outcomes`);
+    state.outcomes.set(Number(job.id), payload.outcomes);
+    if (panel.isConnected && panel.dataset.jobId === String(job.id)) renderOutcomePanel(panel, job, payload.outcomes);
+  } catch (error) {
+    if (panel.isConnected) {
+      const notice = document.createElement("p");
+      notice.className = "package-state hold";
+      notice.textContent = error.message;
+      panel.replaceChildren(notice);
+    }
+  }
 }
 
 function renderJobs() {
   const jobs = filteredJobs();
-  $("#jobCount").textContent = `${jobs.length}건`;
+  $("#jobCount").textContent = `${state.pagination.total}건`;
   const list = $("#jobList");
   list.replaceChildren(...jobs.map(createJobCard));
   if (!jobs.length) {
@@ -181,12 +1075,18 @@ function renderJobs() {
   }
 }
 
+function renderPagination() {
+  $("#jobPageStatus").textContent = `${state.pagination.page} / ${state.pagination.totalPages}`;
+  $("#previousJobPage").disabled = state.pagination.page <= 1;
+  $("#nextJobPage").disabled = state.pagination.page >= state.pagination.totalPages;
+}
+
 function sourceLabel(platform) {
   return state.data.sources?.[platform]?.label || platform;
 }
 
-function renderDetail(jobId) {
-  const job = state.data.jobs.find((item) => item.id === jobId);
+function renderDetail(jobId, suppliedJob = null) {
+  const job = suppliedJob || state.cache.details.get(Number(jobId)) || state.data.jobs.find((item) => item.id === jobId);
   const detail = $("#jobDetail");
   detail.replaceChildren();
   if (!job) return;
@@ -205,10 +1105,38 @@ function renderDetail(jobId) {
     span.textContent = value;
     meta.append(span);
   }
+  if (job.deadline) {
+    const span = document.createElement("span");
+    span.className = job.deadlineDays !== null && job.deadlineDays <= 7 ? "deadline-urgent" : "";
+    span.textContent = `${deadlineLabel(job)} · ${job.deadline}`;
+    meta.append(span);
+  }
+  if (job.discovery?.isNew) {
+    const span = document.createElement("span");
+    span.className = "discovery-badge new";
+    span.textContent = "새 공고";
+    meta.append(span);
+  }
+  if (job.discovery?.isReopened) {
+    const span = document.createElement("span");
+    span.className = "discovery-badge reopened";
+    span.textContent = `재오픈${job.discovery.reopenCount > 1 ? ` ${job.discovery.reopenCount}회` : ""}`;
+    meta.append(span);
+  }
   const summary = document.createElement("p");
   summary.className = "detail-summary";
   summary.textContent = job.summary || "공고 요약이 아직 없습니다.";
   detail.append(company, title, meta, summary);
+  if (job.workflow) {
+    const workflow = document.createElement("section");
+    workflow.className = "workflow-current";
+    const label = document.createElement("strong");
+    label.textContent = `현재 단계 · ${job.workflow.label}`;
+    const description = document.createElement("p");
+    description.textContent = job.workflow.description;
+    workflow.append(label, description);
+    detail.append(workflow);
+  }
   if (job.score !== null && Number(job.score) < Number(state.data.scoreReviewBelow ?? 70)) {
     const caution = document.createElement("p");
     caution.className = "package-state hold";
@@ -281,7 +1209,9 @@ function renderDetail(jobId) {
     const label = document.createElement("strong");
     label.textContent = sourceLabel(source.platform);
     const status = document.createElement("span");
-    status.textContent = `${sourceStatusLabels[source.status] || "확인 필요"} · 상태 확인 신뢰도 ${sourceConfidenceLabel(source.confidence)}`;
+    const sourceDeadline = source.deadline ? ` · 마감 ${source.deadline}` : "";
+    const provenance = source.provenance?.adapterId ? ` · ${source.provenance.adapterId}` : "";
+    status.textContent = `${sourceStatusLabels[source.status] || "확인 필요"}${sourceDeadline} · 상태 확인 신뢰도 ${sourceConfidenceLabel(source.confidence)}${provenance} · 확인 ${formatDateTime(source.checkedAt)}`;
     info.append(label, document.createElement("br"), status);
     const link = document.createElement("a");
     link.href = source.url;
@@ -327,6 +1257,19 @@ function renderDetail(jobId) {
   statePanel.append(statusLabel, noteLabel, save);
   detail.append(statePanel);
   detail.append(renderPackagePanel(job));
+  const outcomePanel = document.createElement("section");
+  outcomePanel.className = "package-panel outcome-panel";
+  outcomePanel.dataset.jobId = job.id;
+  if (state.data.mode === "personal") {
+    const loading = document.createElement("p");
+    loading.className = "subtle";
+    loading.textContent = "지원 결과를 불러오는 중입니다.";
+    outcomePanel.append(loading);
+    loadJobOutcomes(job, outcomePanel);
+  } else {
+    renderOutcomePanel(outcomePanel, job, { eligible: false, events: [], followUps: [], pendingCount: 0 });
+  }
+  detail.append(outcomePanel);
 }
 
 function packageField(section) {
@@ -357,9 +1300,32 @@ function packageField(section) {
 }
 
 function applyJobs(payload, jobId) {
-  state.data.jobs = payload.jobs;
+  if (payload.jobs) state.data.jobs = payload.jobs;
+  if (payload.detail) {
+    state.cache.details.set(Number(jobId), payload.detail);
+    const index = state.data.jobs.findIndex((item) => item.id === Number(jobId));
+    if (index >= 0) state.data.jobs[index] = payload.job || publicSummaryFromDetail(payload.detail);
+  }
+  if (payload.workflow) state.data.workflow = payload.workflow;
+  if (payload.revisions) state.data.revisions = payload.revisions;
+  renderWorkflow();
   renderJobs();
-  renderDetail(jobId);
+  renderPagination();
+  renderDetail(jobId, payload.detail || state.cache.details.get(Number(jobId)));
+  loadJobPage({ force: true }).catch((error) => showToast(error.message, true));
+  loadWorkflow({ force: true }).catch((error) => showToast(error.message, true));
+}
+
+function publicSummaryFromDetail(job) {
+  return {
+    ...job,
+    sources: (job.sources || []).map((source) => ({
+      platform: source.platform,
+      status: source.status,
+      deadline: source.deadline,
+      checkedAt: source.checkedAt,
+    })),
+  };
 }
 
 function packageAction(label, className, handler) {
@@ -384,14 +1350,29 @@ function renderPackagePanel(job) {
   if (!job.package) {
     const copy = document.createElement("p");
     copy.textContent = "기본 이력서에서 공고에 연결된 항목을 불러와 직접 수정하는 작업본입니다. 새 경력을 자동으로 작성하거나 직무 적합성을 판정하지 않습니다.";
-    const create = packageAction("공고별 작업본 만들기", "primary-button", async () => {
-      try {
-        const payload = await request(`/api/jobs/${job.id}/package`, { method: "POST", body: "{}" });
-        applyJobs(payload, job.id);
-        showToast("공고별 작업본을 만들었습니다.");
-      } catch (error) { showToast(error.message, true); }
-    });
-    panel.append(copy, create);
+    if (job.workflow?.stage === "review") {
+      const start = packageAction("공고 검토 시작", "primary-button", async () => {
+        await saveState(job, { workflowStatus: "reviewing" }, "공고 검토를 시작했습니다.");
+      });
+      panel.append(copy, start);
+    } else if (job.workflow?.stage === "draft") {
+      const create = packageAction("공고별 작업본 만들기", "primary-button", async () => {
+        try {
+          const payload = await request(`/api/jobs/${job.id}/package`, { method: "POST", body: "{}" });
+          applyJobs(payload, job.id);
+          showToast("공고별 작업본을 만들었습니다.");
+        } catch (error) { showToast(error.message, true); }
+      });
+      const queue = packageAction("에이전트 문서 생성 요청", "secondary-button", () => {
+        createCompanionRequest("generate_package", { jobId: job.id });
+      });
+      panel.append(copy, create, queue);
+    } else {
+      const unavailable = document.createElement("p");
+      unavailable.className = "package-frozen";
+      unavailable.textContent = "현재 공고 상태에서는 새 작업본을 만들 수 없습니다.";
+      panel.append(copy, unavailable);
+    }
     return panel;
   }
 
@@ -402,6 +1383,13 @@ function renderPackagePanel(job) {
   badge.className = `package-state ${packageValue.quality.status === "passed" ? "ready" : "hold"}`;
   badge.textContent = packageStateLabels[packageValue.state] || packageValue.state;
   heading.append(badge);
+
+  if (!isReadOnlyDemo() && ["draft", "quality", "approval"].includes(job.workflow?.stage)) {
+    const queue = packageAction("에이전트 문서 생성 요청", "secondary-button", () => {
+      createCompanionRequest("generate_package", { jobId: job.id });
+    });
+    panel.append(queue);
+  }
 
   const quality = document.createElement("p");
   quality.className = "package-quality";
@@ -416,6 +1404,43 @@ function renderPackagePanel(job) {
       findings.append(li);
     }
     panel.append(findings);
+  }
+  const changedSections = (packageValue.diff || []).filter((item) => item.changed);
+  if (changedSections.length) {
+    const diff = document.createElement("details");
+    diff.className = "package-diff";
+    const summary = document.createElement("summary");
+    summary.textContent = `기본 이력서와 달라진 항목 ${changedSections.length}개`;
+    diff.append(summary);
+    for (const item of changedSections) {
+      const row = document.createElement("article");
+      const heading = document.createElement("strong");
+      heading.textContent = item.label;
+      const before = document.createElement("div");
+      before.className = "package-diff-before";
+      before.textContent = `수정 전\n${Array.isArray(item.before) ? item.before.join("\n") : item.before || "(비어 있음)"}`;
+      const after = document.createElement("div");
+      after.className = "package-diff-after";
+      after.textContent = `수정 후\n${Array.isArray(item.after) ? item.after.join("\n") : item.after || "(비어 있음)"}`;
+      row.append(heading, before, after);
+      diff.append(row);
+    }
+    panel.append(diff);
+  }
+  if (packageValue.quality.decisions?.length) {
+    const decisions = document.createElement("details");
+    decisions.className = "package-decisions";
+    const summary = document.createElement("summary");
+    summary.textContent = "품질 판정 근거 보기";
+    decisions.append(summary);
+    const list = document.createElement("ul");
+    for (const item of packageValue.quality.decisions) {
+      const row = document.createElement("li");
+      row.textContent = `${item.passed ? "통과" : "보완"} · ${item.message}`;
+      list.append(row);
+    }
+    decisions.append(list);
+    panel.append(decisions);
   }
 
   if (packageValue.refreshRequired) {
@@ -495,7 +1520,7 @@ function renderPackagePanel(job) {
       } catch (error) { showToast(error.message, true); }
     }));
     if (packageValue.state === "approval_pending") {
-      actions.append(packageAction("문안 확인 후 PDF 생성·승인", "primary-button", async () => {
+      actions.append(packageAction("문안 승인·PDF 생성", "primary-button", async () => {
         try {
           const payload = await request(`/api/packages/${packageValue.id}/approve`, {
             method: "POST",
@@ -566,13 +1591,11 @@ function renderPackagePanel(job) {
   return panel;
 }
 
-async function saveState(job, patch) {
+async function saveState(job, patch, successMessage = "공고 상태를 저장했습니다.") {
   try {
     const payload = await request(`/api/jobs/${job.id}/state`, { method: "PATCH", body: JSON.stringify(patch) });
-    state.data.jobs = payload.jobs;
-    renderJobs();
-    renderDetail(job.id);
-    showToast("공고 상태를 저장했습니다.");
+    applyJobs(payload, job.id);
+    showToast(successMessage);
   } catch (error) {
     showToast(error.message, true);
   }
@@ -762,6 +1785,61 @@ function updateScoringWeightTotal() {
   target.classList.toggle("invalid-text", enabledRows.length > 0 && Math.abs(total - 100) > 0.0001);
 }
 
+function renderQualityCriteria(containerSelector, totalSelector, criteria, scope) {
+  const container = $(containerSelector);
+  container.replaceChildren();
+  for (const item of criteria || defaultDocumentQualityCriteria) {
+    const row = document.createElement("div");
+    row.className = "scoring-row";
+    row.dataset.qualityCriterionId = item.id;
+    row.dataset.qualityCriterionScope = scope;
+    const enabledLabel = document.createElement("label");
+    enabledLabel.className = "inline-check";
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.dataset.qualityCriterionField = "enabled";
+    enabled.checked = item.enabled === true;
+    const requiredCriterion = new Set(["required_sections", "placeholder_free"]).has(item.id);
+    enabled.disabled = requiredCriterion || (scope === "settings" && (isReadOnlyDemo() || !state.personalSettings));
+    enabledLabel.append(enabled, document.createTextNode(` ${item.label}`));
+    const weight = document.createElement("input");
+    weight.type = "number";
+    weight.min = "0";
+    weight.max = "100";
+    weight.dataset.qualityCriterionField = "weight";
+    weight.value = item.weight;
+    weight.disabled = enabled.disabled;
+    row.append(enabledLabel, weight);
+    container.append(row);
+  }
+  updateQualityCriteriaTotal(scope, totalSelector);
+}
+
+function collectQualityCriteria(scope) {
+  return $$(`[data-quality-criterion-scope="${scope}"]`).map((row) => {
+    const id = row.dataset.qualityCriterionId;
+    const source = (scope === "onboarding" ? state.onboarding?.resume?.qualityCriteria : state.personalSettings?.resume?.quality_rules?.criteria)
+      || defaultDocumentQualityCriteria;
+    const existing = source.find((item) => item.id === id) || defaultDocumentQualityCriteria.find((item) => item.id === id);
+    return {
+      id,
+      label: existing?.label || id,
+      enabled: Boolean(row.querySelector('[data-quality-criterion-field="enabled"]')?.checked),
+      weight: Number(row.querySelector('[data-quality-criterion-field="weight"]')?.value || 0),
+      ...(new Set(["required_sections", "placeholder_free"]).has(id) ? { required: true } : {}),
+    };
+  });
+}
+
+function updateQualityCriteriaTotal(scope, explicitSelector = "") {
+  const rows = $$(`[data-quality-criterion-scope="${scope}"]`);
+  const enabled = rows.filter((row) => row.querySelector('[data-quality-criterion-field="enabled"]')?.checked);
+  const total = enabled.reduce((sum, row) => sum + Number(row.querySelector('[data-quality-criterion-field="weight"]')?.value || 0), 0);
+  const target = $(explicitSelector || (scope === "onboarding" ? "#qualityCriteriaWeightTotal" : "#settingsQualityCriteriaTotal"));
+  target.textContent = enabled.length ? `활성 가중치 합계 ${total} / 100` : "최소 한 개 기준을 켜야 합니다.";
+  target.classList.toggle("invalid-text", !enabled.length || Math.abs(total - 100) > 0.0001);
+}
+
 function renderOnboardingPreview() {
   const target = $("#onboardingPreview");
   const enabledSources = Object.values(state.onboarding.sources.items || {}).filter((item) => item.collect).map((item) => item.label);
@@ -828,6 +1906,12 @@ function renderOnboarding() {
   inputValue("#setupCountry", onboarding.profile.country);
   inputValue("#setupTimezone", onboarding.profile.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone);
   inputValue("#setupCurrency", onboarding.profile.currency);
+  inputValue("#setupEmail", onboarding.profile.email);
+  inputValue("#setupPhone", onboarding.profile.phone);
+  inputValue("#setupAddress", onboarding.profile.address);
+  $("#setupIncludeEmail").checked = onboarding.profile.includeEmailInPdf === true;
+  $("#setupIncludePhone").checked = onboarding.profile.includePhoneInPdf === true;
+  $("#setupIncludeAddress").checked = onboarding.profile.includeAddressInPdf === true;
   inputValue("#setupDesiredWork", (onboarding.search.desiredWork || []).join("\n"));
   inputValue("#setupAvoidedWork", (onboarding.search.avoidedWork || []).join("\n"));
   inputValue("#setupRegions", (onboarding.search.regions || []).join(", "));
@@ -848,6 +1932,7 @@ function renderOnboarding() {
   renderOnboardingSources();
   renderOnboardingSections();
   renderScoringDimensions();
+  renderQualityCriteria("#setupQualityCriteria", "#qualityCriteriaWeightTotal", onboarding.resume.qualityCriteria, "onboarding");
   inputValue("#setupReviewBelow", onboarding.search.scoring?.reviewBelow ?? 70);
   inputValue("#setupMinimumScore", onboarding.resume.minimumScore ?? 80);
   inputValue("#setupMaximumPages", onboarding.resume.maximumPdfPages ?? 3);
@@ -913,6 +1998,12 @@ function collectOnboardingPatch(currentStep) {
       workModes: splitEntries($("#setupWorkModes").value),
       salaryMinimum: numberOrNull($("#setupSalaryMinimum").value),
       salaryTarget: numberOrNull($("#setupSalaryTarget").value),
+      email: $("#setupEmail").value,
+      phone: $("#setupPhone").value,
+      address: $("#setupAddress").value,
+      includeEmailInPdf: $("#setupIncludeEmail").checked,
+      includePhoneInPdf: $("#setupIncludePhone").checked,
+      includeAddressInPdf: $("#setupIncludeAddress").checked,
     },
     search: {
       primaryRole: $("#setupPrimaryRole").value,
@@ -944,6 +2035,7 @@ function collectOnboardingPatch(currentStep) {
       customPermissions,
       minimumScore: numberOrNull($("#setupMinimumScore").value) ?? 80,
       maximumPdfPages: numberOrNull($("#setupMaximumPages").value) ?? 3,
+      qualityCriteria: collectQualityCriteria("onboarding"),
     },
     analysisReview: collectAnalysisReview(),
   };
@@ -980,6 +2072,8 @@ async function deleteOnboardingFile(kind) {
 function bindOnboardingEvents() {
   $("#setupScoringDimensions").addEventListener("input", updateScoringWeightTotal);
   $("#setupScoringDimensions").addEventListener("change", updateScoringWeightTotal);
+  $("#setupQualityCriteria").addEventListener("input", () => updateQualityCriteriaTotal("onboarding"));
+  $("#setupQualityCriteria").addEventListener("change", () => updateQualityCriteriaTotal("onboarding"));
   $("#previousOnboardingStep").addEventListener("click", async () => {
     try { await saveOnboardingDraft(Math.max(1, state.onboarding.currentStep - 1)); } catch (error) { showToast(error.message, true); }
   });
@@ -1044,6 +2138,66 @@ function bindOnboardingEvents() {
 
 function renderResume() {
   const resume = state.data.resume;
+  const readiness = $("#resumeReadiness");
+  readiness.replaceChildren();
+  const readinessTitle = document.createElement("strong");
+  readinessTitle.textContent = `이력서 준비도 ${resume.readiness?.score || 0}%`;
+  const readinessText = document.createElement("p");
+  readinessText.textContent = resume.readiness?.ready
+    ? "공고별 작업본을 만들기 위한 기본 정보가 준비되었습니다."
+    : (resume.readiness?.missing || []).map((item) => item.message).join(" · ") || "기본 정보를 확인해 주세요.";
+  readiness.classList.toggle("ready", Boolean(resume.readiness?.ready));
+  readiness.append(readinessTitle, readinessText);
+
+  const assets = $("#resumeAssets");
+  assets.replaceChildren();
+  for (const asset of resume.assets || []) {
+    const row = document.createElement("div");
+    row.className = "resume-asset-row";
+    const description = document.createElement("div");
+    const selected = document.createElement("input");
+    selected.type = "checkbox";
+    selected.dataset.analysisDocumentId = asset.id;
+    selected.disabled = isReadOnlyDemo() || asset.status === "archived";
+    selected.setAttribute("aria-label", `${asset.label || asset.originalName} 분석 선택`);
+    const label = document.createElement("strong");
+    label.textContent = asset.label || asset.originalName;
+    const meta = document.createElement("small");
+    meta.textContent = `${asset.kind === "portfolio" ? "포트폴리오" : "이력서"} · ${Math.ceil(Number(asset.size || 0) / 1024)}KB`;
+    description.append(label, meta);
+    const select = document.createElement("select");
+    select.dataset.resumeAssetId = asset.id;
+    for (const [value, text] of [["active", "사용"], ["review_required", "검토 필요"], ["archived", "보관"]]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      select.append(option);
+    }
+    select.value = asset.status || "active";
+    select.disabled = isReadOnlyDemo();
+    select.addEventListener("change", async () => {
+      try {
+        const payload = await request(`/api/resume/assets/${encodeURIComponent(asset.id)}`, {
+          method: "PATCH", body: JSON.stringify({ status: select.value, label: asset.label || asset.originalName }),
+        });
+        state.data.resume = payload.resume;
+        if (payload.jobs) state.data.jobs = payload.jobs;
+        if (payload.workflow) state.data.workflow = payload.workflow;
+        renderResume();
+        renderJobs();
+        showToast("문서 자산 상태를 저장했습니다.");
+      } catch (error) { showToast(error.message, true); renderResume(); }
+    });
+    row.append(selected, description, select);
+    assets.append(row);
+  }
+  if (!(resume.assets || []).length) {
+    const empty = document.createElement("p");
+    empty.className = "subtle";
+    empty.textContent = "등록된 이력서·포트폴리오 자산이 없습니다.";
+    assets.append(empty);
+  }
+  renderDocumentManager();
   $("#resumeJobFamily").value = resume.jobFamily || "";
   $("#resumeJobRole").value = resume.jobRole || "";
   $("#resumeCareerType").value = resume.careerType || "new";
@@ -1064,6 +2218,15 @@ function renderResume() {
   $("#resumeCareerDirection").value = resume.careerDirection || "";
   const editable = new Set(resume.editableSections || []);
   $$('[data-editable-section]').forEach((input) => { input.checked = editable.has(input.dataset.editableSection); });
+  const structuredContainer = $("#resumeStructuredItems");
+  structuredContainer.replaceChildren();
+  for (const item of resume.structuredItems || []) structuredContainer.append(renderStructuredResumeItem(item));
+  if (!(resume.structuredItems || []).length) {
+    const empty = document.createElement("p");
+    empty.className = "subtle";
+    empty.textContent = "구조화 항목이 없습니다. 사용자가 입력하지 않은 경력이나 기술은 자동 생성하지 않습니다.";
+    structuredContainer.append(empty);
+  }
   const customContainer = $("#resumeCustomSections");
   customContainer.replaceChildren();
   for (const section of resume.customSections || []) {
@@ -1127,6 +2290,97 @@ function renderResume() {
   }
 }
 
+function structuredField(labelText, field, value = "", { textarea = false, placeholder = "" } = {}) {
+  const label = document.createElement("label");
+  const title = document.createElement("span");
+  title.textContent = labelText;
+  const input = textarea ? document.createElement("textarea") : document.createElement("input");
+  if (textarea) input.rows = 3;
+  input.dataset.structuredField = field;
+  input.value = Array.isArray(value) ? value.join("\n") : value || "";
+  input.placeholder = placeholder;
+  label.append(title, input);
+  return label;
+}
+
+function renderStructuredResumeItem(item) {
+  const card = document.createElement("article");
+  card.className = "structured-editor-card";
+  card.dataset.structuredId = item.id;
+  const header = document.createElement("div");
+  header.className = "structured-editor-head";
+  const kind = document.createElement("select");
+  kind.dataset.structuredField = "kind";
+  for (const [value, label] of Object.entries(structuredKindLabels)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    kind.append(option);
+  }
+  kind.value = item.kind || "experience";
+  const activeLabel = document.createElement("label");
+  activeLabel.className = "inline-check";
+  const active = document.createElement("input");
+  active.type = "checkbox";
+  active.dataset.structuredField = "active";
+  active.checked = item.active !== false;
+  activeLabel.append(active, document.createTextNode(" 출력에 사용"));
+  const remove = document.createElement("button");
+  remove.className = "text-button";
+  remove.type = "button";
+  remove.textContent = "삭제";
+  remove.addEventListener("click", () => {
+    state.data.resume.structuredItems = (state.data.resume.structuredItems || []).filter((candidate) => candidate.id !== item.id);
+    card.remove();
+    const container = $("#resumeStructuredItems");
+    if (!container.children.length) {
+      const empty = document.createElement("p");
+      empty.className = "subtle";
+      empty.textContent = "구조화 항목이 없습니다. 사용자가 입력하지 않은 경력이나 기술은 자동 생성하지 않습니다.";
+      container.append(empty);
+    }
+  });
+  header.append(kind, activeLabel, remove);
+  const grid = document.createElement("div");
+  grid.className = "form-grid";
+  grid.append(
+    structuredField("항목명", "title", item.title, { placeholder: "직책, 학위, 기술, 자격 또는 프로젝트명" }),
+    structuredField("기관·회사", "organization", item.organization),
+    structuredField("역할·전공", "role", item.role),
+    structuredField("지역", "location", item.location),
+    structuredField("시작", "startDate", item.startDate, { placeholder: "YYYY 또는 YYYY-MM" }),
+    structuredField("종료", "endDate", item.endDate, { placeholder: "YYYY-MM 또는 present" }),
+  );
+  card.append(header, grid,
+    structuredField("설명", "summary", item.summary, { textarea: true }),
+    structuredField("주요 내용 · 한 줄에 하나", "highlights", item.highlights, { textarea: true }),
+    structuredField("관련 기술 · 한 줄에 하나", "skills", item.skills, { textarea: true }));
+  return card;
+}
+
+function collectStructuredResumeItems() {
+  const lines = (value) => value.split("\n").map((entry) => entry.trim()).filter(Boolean);
+  return $$('[data-structured-id]').map((card, index) => {
+    const value = (field) => card.querySelector(`[data-structured-field="${field}"]`);
+    return {
+      id: card.dataset.structuredId,
+      kind: value("kind").value,
+      title: value("title").value,
+      organization: value("organization").value,
+      role: value("role").value,
+      location: value("location").value,
+      startDate: value("startDate").value,
+      endDate: value("endDate").value,
+      summary: value("summary").value,
+      highlights: lines(value("highlights").value),
+      skills: lines(value("skills").value),
+      sourceRefs: (state.data.resume.structuredItems || []).find((item) => item.id === card.dataset.structuredId)?.sourceRefs || [],
+      displayOrder: index + 1,
+      active: value("active").checked,
+    };
+  });
+}
+
 function renderSettings() {
   const labels = { profile: "기본 프로필", search: "검색 전략", sources: "플랫폼", resume: "이력서" };
   const checklist = $("#configChecklist");
@@ -1144,14 +2398,33 @@ function renderSettings() {
   }
   const sources = $("#sourceSettings");
   sources.replaceChildren();
-  for (const [key, item] of Object.entries(state.data.sources || {}).sort((a, b) => a[1].priority - b[1].priority)) {
+  const editableSources = state.personalSettings?.sources?.items || state.data.sources || {};
+  for (const [key, item] of Object.entries(editableSources).sort((a, b) => a[1].priority - b[1].priority)) {
     const row = document.createElement("div");
     row.className = "source-setting";
+    row.dataset.settingsSource = key;
     const name = document.createElement("strong");
     name.textContent = item.label || key;
-    const status = document.createElement("span");
-    status.textContent = `${item.collect ? "수집 대상" : "수집 제외"} · ${item.display ? "화면 표시" : "화면 숨김"} · 대표 링크 순서 ${item.priority}`;
-    row.append(name, status);
+    const controls = document.createElement("div");
+    controls.className = "source-setting-controls";
+    for (const [field, textValue] of [["collect", "수집"], ["display", "표시"], ["lifecycle_check", "마감 확인"]]) {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.dataset.sourceField = field;
+      checkbox.checked = item[field] !== false && (field !== "collect" || item[field] === true);
+      checkbox.disabled = isReadOnlyDemo() || !state.personalSettings;
+      label.append(checkbox, document.createTextNode(textValue));
+      controls.append(label);
+    }
+    const priority = document.createElement("input");
+    priority.type = "number";
+    priority.dataset.sourceField = "priority";
+    priority.value = item.priority;
+    priority.setAttribute("aria-label", `${item.label || key} 대표 링크 순서`);
+    priority.disabled = isReadOnlyDemo() || !state.personalSettings;
+    controls.append(priority);
+    row.append(name, controls);
     sources.append(row);
   }
   const scoring = $("#scoringSettings");
@@ -1174,6 +2447,85 @@ function renderSettings() {
       scoring.append(row);
     }
   }
+  if (state.personalSettings) {
+    const settings = state.personalSettings;
+    $("#settingsDisplayName").value = settings.profile.displayName || "";
+    $("#settingsTimezone").value = settings.profile.timezone || "Asia/Seoul";
+    $("#settingsTargetRoles").value = (settings.search.targetRoles || []).join("\n");
+    $("#settingsTracks").value = (settings.search.tracks || []).join("\n");
+    $("#settingsRegions").value = (settings.profile.regions || []).join("\n");
+    $("#settingsIncludeKeywords").value = (settings.search.includeKeywords || []).join("\n");
+    $("#settingsExcludeKeywords").value = (settings.search.excludeKeywords || []).join("\n");
+    $("#settingsDesiredWork").value = (settings.search.desiredWork || []).join("\n");
+    $("#settingsAvoidedWork").value = (settings.search.avoidedWork || []).join("\n");
+    $("#settingsMinimumScore").value = settings.resume.quality_rules?.minimum_score ?? 80;
+    $("#settingsMaximumPages").value = settings.resume.quality_rules?.maximum_pdf_pages ?? 3;
+  }
+  renderQualityCriteria("#settingsQualityCriteria", "#settingsQualityCriteriaTotal",
+    state.personalSettings?.resume?.quality_rules?.criteria || defaultDocumentQualityCriteria, "settings");
+}
+
+function renderDocumentManager() {
+  const replace = $("#personalDocumentReplace");
+  if (!replace) return;
+  const current = replace.value;
+  const first = document.createElement("option");
+  first.value = "";
+  first.textContent = "새 문서로 추가";
+  replace.replaceChildren(first);
+  const kind = $("#personalDocumentKind").value;
+  const documents = state.personalSettings?.documents || (state.data?.resume?.assets || []);
+  for (const documentValue of documents.filter((item) => item.kind === kind && item.active !== false && item.status !== "archived")) {
+    const option = document.createElement("option");
+    option.value = documentValue.id;
+    option.textContent = `${documentValue.originalName || documentValue.label} 교체`;
+    replace.append(option);
+  }
+  replace.value = [...replace.options].some((item) => item.value === current) ? current : "";
+  protectDemoControl($("#personalDocumentKind"));
+  protectDemoControl(replace);
+  protectDemoControl($("#personalDocumentFile"));
+  protectDemoControl($("#personalDocumentForm button"));
+  protectDemoControl($("#reanalyzeDocuments"));
+}
+
+function syncFilterControls() {
+  $("#searchInput").value = state.filters.search;
+  $("#trackFilter").value = state.filters.track;
+  $("#platformFilter").value = state.filters.platform;
+  $("#statusFilter").value = state.filters.status;
+  $("#lifecycleFilter").value = state.filters.lifecycle;
+  $("#deadlineFilter").value = state.filters.deadline;
+  $("#jobSort").value = state.filters.sort;
+  $("#favoriteFilter").checked = state.filters.favorite;
+}
+
+function renderSavedFilters() {
+  const select = $("#savedFilterSelect");
+  const current = select.value;
+  const first = document.createElement("option");
+  first.value = "";
+  first.textContent = "직접 설정";
+  select.replaceChildren(first);
+  for (const item of state.data.savedFilters || []) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = `${item.isDefault ? "★ " : ""}${item.name}`;
+    select.append(option);
+  }
+  select.value = (state.data.savedFilters || []).some((item) => item.id === current) ? current : "";
+  protectDemoControl(select);
+  protectDemoControl($("#savedFilterName"));
+  protectDemoControl($("#savedFilterDefault"));
+  protectDemoControl($("#saveCurrentFilter"));
+  protectDemoControl($("#deleteSavedFilter"));
+  $("#deleteSavedFilter").disabled = isReadOnlyDemo() || !select.value;
+}
+
+async function refreshJobFilters() {
+  state.pagination.page = 1;
+  state.selectedJobId = null;
+  await loadJobPage({ force: true });
 }
 
 function renderAll() {
@@ -1188,18 +2540,37 @@ function renderAll() {
   $("#displayName").textContent = state.data.profile.displayName || "";
   $("#modeBadge").textContent = state.data.mode === "demo" ? "예시 데이터" : "개인 데이터";
   $("#exampleBanner").hidden = state.data.mode !== "demo";
-  fillSelect($("#trackFilter"), [...new Set(state.data.jobs.map((job) => job.track))]);
-  fillSelect($("#platformFilter"), [...new Set(state.data.jobs.flatMap((job) => job.sources.map((source) => source.platform)))]);
+  fillSelect($("#trackFilter"), state.facets.tracks || []);
+  fillSelect($("#platformFilter"), state.facets.platforms || []);
+  syncFilterControls();
   renderJobs();
+  renderPagination();
+  renderWorkflow();
+  renderCompanion();
+  renderInbox();
+  renderSavedFilters();
   renderResume();
   renderSettings();
 }
 
 function bindEvents() {
-  $$(".tab").forEach((button) => button.addEventListener("click", () => setScreen(button.dataset.screen)));
-  $("#searchInput").addEventListener("input", (event) => { state.filters.search = event.target.value; renderJobs(); });
-  $("#trackFilter").addEventListener("change", (event) => { state.filters.track = event.target.value; renderJobs(); });
-  $("#platformFilter").addEventListener("change", (event) => { state.filters.platform = event.target.value; renderJobs(); });
+  let searchTimer;
+  $$(".tab").forEach((button) => button.addEventListener("click", () => {
+    setScreen(button.dataset.screen);
+    if (["settings", "resume"].includes(button.dataset.screen) && !isReadOnlyDemo()) {
+      loadPersonalSettings().catch((error) => showToast(error.message, true));
+    }
+  }));
+  $("#queueJobCollection").addEventListener("click", () => createCompanionRequest("collect_jobs"));
+  $("#queueDocumentAnalysis").addEventListener("click", () => createCompanionRequest("analyze_documents"));
+  $("#searchInput").addEventListener("input", (event) => {
+    state.filters.search = event.target.value;
+    renderJobs();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => refreshJobFilters().catch((error) => showToast(error.message, true)), 180);
+  });
+  $("#trackFilter").addEventListener("change", (event) => { state.filters.track = event.target.value; renderJobs(); refreshJobFilters().catch((error) => showToast(error.message, true)); });
+  $("#platformFilter").addEventListener("change", (event) => { state.filters.platform = event.target.value; renderJobs(); refreshJobFilters().catch((error) => showToast(error.message, true)); });
   $("#statusFilter").addEventListener("change", (event) => {
     state.filters.status = event.target.value;
     if (["skipped", "rejected"].includes(state.filters.status) && state.filters.lifecycle === "active") {
@@ -1208,6 +2579,7 @@ function bindEvents() {
       showToast("종료·제외 상태를 볼 수 있도록 공고 보기를 전체로 바꿨습니다.");
     }
     renderJobs();
+    refreshJobFilters().catch((error) => showToast(error.message, true));
   });
   $("#lifecycleFilter").addEventListener("change", (event) => {
     state.filters.lifecycle = event.target.value;
@@ -1217,11 +2589,161 @@ function bindEvents() {
       showToast("활성 공고를 볼 수 있도록 지원 상태를 전체로 바꿨습니다.");
     }
     renderJobs();
+    refreshJobFilters().catch((error) => showToast(error.message, true));
   });
-  $("#favoriteFilter").addEventListener("change", (event) => { state.filters.favorite = event.target.checked; renderJobs(); });
+  $("#deadlineFilter").addEventListener("change", (event) => { state.filters.deadline = event.target.value; renderJobs(); refreshJobFilters().catch((error) => showToast(error.message, true)); });
+  $("#jobSort").addEventListener("change", (event) => { state.filters.sort = event.target.value; renderJobs(); refreshJobFilters().catch((error) => showToast(error.message, true)); });
+  $("#favoriteFilter").addEventListener("change", (event) => { state.filters.favorite = event.target.checked; renderJobs(); refreshJobFilters().catch((error) => showToast(error.message, true)); });
+  $("#previousJobPage").addEventListener("click", () => {
+    if (state.pagination.page <= 1) return;
+    state.pagination.page -= 1;
+    loadJobPage({ force: true }).catch((error) => showToast(error.message, true));
+  });
+  $("#nextJobPage").addEventListener("click", () => {
+    if (state.pagination.page >= state.pagination.totalPages) return;
+    state.pagination.page += 1;
+    loadJobPage({ force: true }).catch((error) => showToast(error.message, true));
+  });
+  $("#savedFilterSelect").addEventListener("change", (event) => {
+    const saved = (state.data.savedFilters || []).find((item) => item.id === event.target.value);
+    $("#deleteSavedFilter").disabled = !saved;
+    if (!saved) return;
+    state.filters = { ...saved.filters };
+    $("#savedFilterName").value = saved.name;
+    $("#savedFilterDefault").checked = saved.isDefault;
+    syncFilterControls();
+    renderJobs();
+    refreshJobFilters().catch((error) => showToast(error.message, true));
+  });
+  $("#saveCurrentFilter").addEventListener("click", async () => {
+    if (isReadOnlyDemo()) return;
+    try {
+      const payload = await request("/api/saved-filters", {
+        method: "POST",
+        body: JSON.stringify({ name: $("#savedFilterName").value, filters: state.filters, isDefault: $("#savedFilterDefault").checked }),
+      });
+      state.data.savedFilters = payload.savedFilters;
+      renderSavedFilters();
+      $("#savedFilterSelect").value = payload.savedFilter.id;
+      $("#deleteSavedFilter").disabled = false;
+      showToast("현재 공고 필터를 저장했습니다.");
+    } catch (error) { showToast(error.message, true); }
+  });
+  $("#deleteSavedFilter").addEventListener("click", async () => {
+    const id = $("#savedFilterSelect").value;
+    if (isReadOnlyDemo() || !id) return;
+    try {
+      const payload = await request(`/api/saved-filters/${id}`, { method: "DELETE", body: "{}" });
+      state.data.savedFilters = payload.savedFilters;
+      $("#savedFilterName").value = "";
+      $("#savedFilterDefault").checked = false;
+      renderSavedFilters();
+      showToast("저장 필터를 삭제했습니다.");
+    } catch (error) { showToast(error.message, true); }
+  });
   $("#resumeCareerType").addEventListener("change", (event) => {
     $("#resumeYearsExperience").disabled = event.target.value !== "experienced";
   });
+  $("#personalDocumentKind").addEventListener("change", renderDocumentManager);
+  $("#personalDocumentForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (isReadOnlyDemo()) return;
+    const file = $("#personalDocumentFile").files[0];
+    if (!file) return showToast("등록할 PDF 또는 DOCX를 선택해 주세요.", true);
+    const form = new FormData();
+    form.append("document", file);
+    const params = new URLSearchParams({ kind: $("#personalDocumentKind").value });
+    if ($("#personalDocumentReplace").value) params.set("replace", $("#personalDocumentReplace").value);
+    try {
+      const payload = await request(`/api/settings/documents?${params}`, { method: "POST", body: form });
+      state.personalSettings ||= {};
+      state.personalSettings.documents = payload.documents;
+      state.data.resume = payload.resume;
+      state.data.companionTasks = payload.tasks;
+      $("#personalDocumentFile").value = "";
+      renderResume();
+      renderCompanion();
+      showToast(payload.replacedDocumentId ? "문서를 교체했습니다. 새 문서를 다시 분석해 주세요." : "문서를 등록했습니다. 분석할 문서를 선택해 주세요.");
+    } catch (error) { showToast(error.message, true); }
+  });
+  $("#reanalyzeDocuments").addEventListener("click", () => {
+    const documentIds = $$('[data-analysis-document-id]:checked').map((item) => item.dataset.analysisDocumentId);
+    if (!documentIds.length) return showToast("다시 분석할 활성 문서를 선택해 주세요.", true);
+    createCompanionRequest("analyze_documents", { documentIds });
+  });
+  $("#personalSettingsForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (isReadOnlyDemo() || !state.personalSettings) return;
+    const lineValues = (selector) => $(selector).value.split("\n").map((item) => item.trim()).filter(Boolean);
+    const sourceItems = structuredClone(state.personalSettings.sources.items || {});
+    for (const row of $$('[data-settings-source]')) {
+      const item = sourceItems[row.dataset.settingsSource];
+      if (!item) continue;
+      for (const input of row.querySelectorAll("[data-source-field]")) {
+        item[input.dataset.sourceField] = input.type === "checkbox" ? input.checked : Number(input.value);
+      }
+    }
+    try {
+      const payload = await request("/api/settings", {
+        method: "PATCH",
+        body: JSON.stringify({
+          profile: {
+            displayName: $("#settingsDisplayName").value,
+            timezone: $("#settingsTimezone").value,
+            regions: lineValues("#settingsRegions"),
+          },
+          search: {
+            targetRoles: lineValues("#settingsTargetRoles"),
+            tracks: lineValues("#settingsTracks"),
+            includeKeywords: lineValues("#settingsIncludeKeywords"),
+            excludeKeywords: lineValues("#settingsExcludeKeywords"),
+            desiredWork: lineValues("#settingsDesiredWork"),
+            avoidedWork: lineValues("#settingsAvoidedWork"),
+          },
+          sources: { ...state.personalSettings.sources, items: sourceItems },
+          resume: {
+            quality_rules: {
+              minimum_score: Number($("#settingsMinimumScore").value),
+              maximum_pdf_pages: Number($("#settingsMaximumPages").value),
+              criteria: collectQualityCriteria("settings"),
+            },
+          },
+        }),
+      });
+      state.personalSettings = payload.settings;
+      await refreshDashboardData();
+      showToast(payload.supersededTaskIds?.length
+        ? `개인 설정을 저장했고 이전 입력 기준 결과 ${payload.supersededTaskIds.length}건을 대체 처리했습니다.`
+        : "개인 설정을 저장했습니다.");
+    } catch (error) { showToast(error.message, true); }
+  });
+  $("#settingsQualityCriteria").addEventListener("input", () => updateQualityCriteriaTotal("settings"));
+  $("#settingsQualityCriteria").addEventListener("change", () => updateQualityCriteriaTotal("settings"));
+  $$('[data-add-structured]').forEach((button) => button.addEventListener("click", () => {
+    if (isReadOnlyDemo()) return;
+    const kind = button.dataset.addStructured;
+    const item = {
+      id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      kind,
+      title: "",
+      organization: "",
+      role: "",
+      location: "",
+      startDate: "",
+      endDate: "",
+      summary: "",
+      highlights: [],
+      skills: [],
+      sourceRefs: [],
+      active: true,
+    };
+    state.data.resume.structuredItems = [...(state.data.resume.structuredItems || []), item];
+    const container = $("#resumeStructuredItems");
+    if (!container.querySelector('[data-structured-id]')) container.replaceChildren();
+    const card = renderStructuredResumeItem(item);
+    container.append(card);
+    card.querySelector('[data-structured-field="title"]')?.focus();
+  }));
   $("#resumeForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     if (isReadOnlyDemo()) return;
@@ -1248,6 +2770,7 @@ function bindEvents() {
           collaborationScope: $("#resumeCollaborationScope").value,
           careerDirection: $("#resumeCareerDirection").value,
           editableSections: $$('[data-editable-section]:checked').map((input) => input.dataset.editableSection),
+          structuredItems: collectStructuredResumeItems(),
           customSections: (state.data.resume.customSections || []).map((section, index) => {
             const row = $$('[data-custom-section-id]').find((item) => item.dataset.customSectionId === section.id);
             const value = row?.querySelector('[data-custom-value]')?.value || "";
@@ -1262,6 +2785,15 @@ function bindEvents() {
       });
       state.data.resume = payload.resume;
       renderResume();
+      try {
+        await Promise.all([
+          loadJobPage({ force: true }),
+          loadWorkflow({ force: true }),
+        ]);
+      } catch (refreshError) {
+        showToast(`이력서는 저장됐지만 화면 갱신에 실패했습니다: ${refreshError.message}`, true);
+        return;
+      }
       showToast("이력서 기준을 저장했습니다.");
     } catch (error) {
       showToast(error.message, true);
@@ -1271,10 +2803,29 @@ function bindEvents() {
 
 async function initialize() {
   try {
-    state.data = await request("/api/dashboard");
+    state.data = await request("/api/bootstrap");
+    let workflowPromise = null;
+    if (state.data.mode !== "onboarding") {
+      const initialFilter = (state.data.savedFilters || []).find((item) => item.isDefault);
+      if (initialFilter) state.filters = { ...initialFilter.filters };
+      await loadJobPage({ render: false });
+    }
+    const [hashScreen, query = ""] = window.location.hash.slice(1).split("?");
+    const deepLink = new URLSearchParams(query);
+    if (hashScreen === "jobs" && Number(deepLink.get("job"))) {
+      state.screen = "jobs";
+      state.selectedJobId = Number(deepLink.get("job"));
+    }
     renderAll();
+    if (state.data.mode !== "onboarding") {
+      workflowPromise = loadWorkflow();
+    }
+    if (state.data.mode !== "onboarding" && state.selectedJobId) {
+      navigateToJob(state.selectedJobId, deepLink.get("focus") || "");
+    }
     if (state.data.mode === "onboarding") bindOnboardingEvents();
     else bindEvents();
+    if (workflowPromise) await workflowPromise;
   } catch (error) {
     showToast(error.message, true);
   }

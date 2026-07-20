@@ -26,7 +26,10 @@
       </div>
 
       <nav class="tabs" aria-label="주요 화면">
-        <button class="tab active" type="button" data-screen="jobs">공고 관리</button>
+        <button class="tab active" type="button" data-screen="home">홈·작업함</button>
+        <button class="tab" type="button" data-screen="jobs">공고 관리</button>
+        <button class="tab" type="button" data-screen="inbox">알림함 <span id="inboxUnreadBadge" class="tab-badge" hidden>0</span></button>
+        <button class="tab" type="button" data-screen="companion">에이전트 작업</button>
         <button class="tab" type="button" data-screen="resume">이력서 기준</button>
         <button class="tab" type="button" data-screen="settings">초기 설정</button>
       </nav>
@@ -103,6 +106,20 @@
                   <label><span>시간대</span><input id="setupTimezone" maxlength="80"></label>
                   <label><span>통화</span><input id="setupCurrency" maxlength="20"></label>
                 </div>
+                <details class="advanced-settings">
+                  <summary>최종 PDF 연락처 · 선택 입력</summary>
+                  <p>값과 체크 여부는 로컬 <code>profile.yml</code>에만 저장됩니다. 체크한 항목만 최종 PDF에 표시됩니다.</p>
+                  <div class="form-grid">
+                    <label><span>이메일</span><input id="setupEmail" type="email" autocomplete="email"></label>
+                    <label><span>전화번호</span><input id="setupPhone" autocomplete="tel"></label>
+                    <label><span>주소</span><input id="setupAddress" autocomplete="street-address"></label>
+                  </div>
+                  <div class="checkbox-grid">
+                    <label><input id="setupIncludeEmail" type="checkbox"> 이메일을 PDF에 표시</label>
+                    <label><input id="setupIncludePhone" type="checkbox"> 전화번호를 PDF에 표시</label>
+                    <label><input id="setupIncludeAddress" type="checkbox"> 주소를 PDF에 표시</label>
+                  </div>
+                </details>
                 <label><span>선호하는 업무</span><textarea id="setupDesiredWork" rows="4" placeholder="한 줄에 하나씩 입력"></textarea></label>
                 <label><span>피하고 싶은 업무</span><textarea id="setupAvoidedWork" rows="4" placeholder="한 줄에 하나씩 입력"></textarea></label>
               </section>
@@ -158,7 +175,12 @@
                 <div id="setupScoringDimensions" class="scoring-dimensions"></div>
                 <p id="scoringWeightTotal" class="subtle">평가 기준 사용 안 함</p>
                 <label><span>이 점수 미만이면 검토 필요</span><input id="setupReviewBelow" type="number" min="0" max="100"></label>
-                <details class="advanced-settings"><summary>문서 준비 기준</summary><div class="form-grid"><label><span>최소 작성 완성도</span><input id="setupMinimumScore" type="number" min="0" max="100"></label><label><span>PDF 최대 페이지</span><input id="setupMaximumPages" type="number" min="1" max="10"></label></div></details>
+                <details class="advanced-settings"><summary>맞춤 문서 품질 기준</summary>
+                  <p>직무와 무관한 공통 기준입니다. 활성 기준의 가중치 합계가 100이어야 합니다.</p>
+                  <div id="setupQualityCriteria" class="scoring-dimensions"></div>
+                  <p id="qualityCriteriaWeightTotal" class="subtle"></p>
+                  <div class="form-grid"><label><span>최소 작성 완성도</span><input id="setupMinimumScore" type="number" min="0" max="100"></label><label><span>PDF 최대 페이지</span><input id="setupMaximumPages" type="number" min="1" max="10"></label></div>
+                </details>
               </section>
 
               <section class="onboarding-panel" data-onboarding-step="11" hidden>
@@ -176,7 +198,38 @@
           </div>
         </section>
 
-        <section id="jobsScreen" class="screen">
+        <section id="workflowScreen" class="screen">
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">NEXT ACTIONS</p>
+              <h2>지금 할 일</h2>
+              <p class="subtle">저장된 지원 상태와 최신 작업본에서 다음 행동을 계산합니다. 별도 상태를 중복 저장하지 않습니다.</p>
+            </div>
+            <span id="workflowCount" class="count-pill">0건</span>
+          </div>
+          <div class="workflow-summary" aria-label="작업 현황">
+            <article class="card workflow-stat"><span>공고 검토</span><strong id="workflowReviewCount">0</strong></article>
+            <article class="card workflow-stat"><span>보완 필요</span><strong id="workflowQualityCount">0</strong></article>
+            <article class="card workflow-stat"><span>승인 대기</span><strong id="workflowApprovalCount">0</strong></article>
+            <article class="card workflow-stat"><span>제출 준비</span><strong id="workflowSubmissionCount">0</strong></article>
+            <article class="card workflow-stat"><span>예정 후속조치</span><strong id="workflowFollowUpCount">0</strong></article>
+          </div>
+          <div id="workflowQueues" class="workflow-queues"></div>
+        </section>
+
+        <section id="inboxScreen" class="screen" hidden>
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">LOCAL INBOX</p>
+              <h2>지원 결과·후속조치 알림</h2>
+              <p class="subtle">이 컴퓨터의 대시보드 안에서만 표시되며 외부 메시지를 전송하지 않습니다.</p>
+            </div>
+            <span id="inboxCount" class="count-pill">0건</span>
+          </div>
+          <div id="inboxList" class="inbox-list"></div>
+        </section>
+
+        <section id="jobsScreen" class="screen" hidden>
           <div class="section-head">
             <div>
               <p class="section-kicker">JOB BOARD</p>
@@ -186,6 +239,19 @@
           </div>
 
           <div class="filters card">
+            <label>
+              <span>저장 필터</span>
+              <select id="savedFilterSelect"><option value="">직접 설정</option></select>
+            </label>
+            <label>
+              <span>필터 이름</span>
+              <input id="savedFilterName" maxlength="80" placeholder="현재 조건 저장">
+            </label>
+            <div class="saved-filter-actions">
+              <label class="favorite-filter"><input id="savedFilterDefault" type="checkbox"><span>시작 필터</span></label>
+              <button id="saveCurrentFilter" class="secondary-button" type="button">저장</button>
+              <button id="deleteSavedFilter" class="text-button" type="button">삭제</button>
+            </div>
             <label>
               <span>검색</span>
               <input id="searchInput" type="search" placeholder="회사명 또는 직무명">
@@ -219,6 +285,23 @@
                 <option value="all">전체</option>
               </select>
             </label>
+            <label>
+              <span>마감</span>
+              <select id="deadlineFilter">
+                <option value="">전체</option>
+                <option value="urgent">7일 이내</option>
+                <option value="overdue">기한 지남</option>
+                <option value="none">마감일 없음</option>
+              </select>
+            </label>
+            <label>
+              <span>정렬</span>
+              <select id="jobSort">
+                <option value="score">점수 높은 순</option>
+                <option value="deadline">마감 임박 순</option>
+                <option value="recent">최근 확인 순</option>
+              </select>
+            </label>
             <label class="favorite-filter">
               <input id="favoriteFilter" type="checkbox">
               <span>관심 공고만</span>
@@ -235,6 +318,33 @@
               </div>
             </aside>
           </div>
+          <div id="jobPagination" class="pagination-controls">
+            <button id="previousJobPage" class="secondary-button" type="button">이전</button>
+            <span id="jobPageStatus" class="subtle">1 / 1</span>
+            <button id="nextJobPage" class="secondary-button" type="button">다음</button>
+          </div>
+        </section>
+
+        <section id="companionScreen" class="screen" hidden>
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">LOCAL COMPANION</p>
+              <h2>Codex·Claude 작업 요청</h2>
+              <p class="subtle">AI 계정이나 토큰은 저장하지 않습니다. 현재 로그인된 로컬 에이전트 세션이 owner-only 요청 파일을 처리합니다.</p>
+            </div>
+            <span id="companionTaskCount" class="count-pill">0건</span>
+          </div>
+          <div class="card companion-create">
+            <div>
+              <strong>새 로컬 작업</strong>
+              <p>동일한 활성 요청은 하나로 합치고, 문서 생성은 한 번에 하나만 실행합니다.</p>
+            </div>
+            <div class="companion-create-actions">
+              <button id="queueJobCollection" class="secondary-button" type="button">공고 수집 요청</button>
+              <button id="queueDocumentAnalysis" class="secondary-button" type="button">등록 문서 분석 요청</button>
+            </div>
+          </div>
+          <div id="companionTaskList" class="companion-task-list"></div>
         </section>
 
         <section id="resumeScreen" class="screen" hidden>
@@ -246,6 +356,20 @@
             </div>
             <span id="resumeSavedAt" class="subtle"></span>
           </div>
+          <div id="resumeReadiness" class="card resume-readiness"></div>
+          <section class="card resume-assets-panel">
+            <div class="panel-title-row">
+              <div><strong>이력서·포트폴리오 자산</strong><p class="subtle">초기 등록 문서의 사용 상태를 관리합니다.</p></div>
+            </div>
+            <form id="personalDocumentForm" class="document-manager">
+              <label><span>문서 종류</span><select id="personalDocumentKind"><option value="resume">이력서</option><option value="portfolio">포트폴리오</option></select></label>
+              <label><span>추가 또는 교체</span><select id="personalDocumentReplace"><option value="">새 문서로 추가</option></select></label>
+              <label><span>PDF 또는 DOCX</span><input id="personalDocumentFile" type="file" accept=".pdf,.docx" required></label>
+              <button class="secondary-button" type="submit">문서 등록</button>
+            </form>
+            <div id="resumeAssets" class="resume-assets"></div>
+            <button id="reanalyzeDocuments" class="secondary-button" type="button">선택 문서 다시 분석</button>
+          </section>
           <form id="resumeForm" class="resume-form card">
             <div class="form-grid">
               <label>
@@ -343,6 +467,18 @@
               </div>
             </fieldset>
             <fieldset class="editable-sections">
+              <legend>구조화 경력·학력·기술·자격·프로젝트</legend>
+              <p>직무와 무관한 고정 양식이 아니라 사용자가 실제로 입력한 항목만 최종 문서에 포함됩니다.</p>
+              <div class="structured-add-actions">
+                <button class="text-button" type="button" data-add-structured="experience">경력 추가</button>
+                <button class="text-button" type="button" data-add-structured="education">학력 추가</button>
+                <button class="text-button" type="button" data-add-structured="skill">기술 추가</button>
+                <button class="text-button" type="button" data-add-structured="certification">자격 추가</button>
+                <button class="text-button" type="button" data-add-structured="project">프로젝트 추가</button>
+              </div>
+              <div id="resumeStructuredItems" class="structured-item-list"></div>
+            </fieldset>
+            <fieldset class="editable-sections">
               <legend>첨부 문서에서 가져온 추가 항목</legend>
               <p>기존 9개 항목과 겹치지 않는 섹션만 표시됩니다.</p>
               <div id="resumeCustomSections" class="custom-section-list"></div>
@@ -367,6 +503,32 @@
             </div>
           </div>
           <div class="settings-grid">
+            <form id="personalSettingsForm" class="card settings-card full">
+              <h3>언제든 수정할 수 있는 개인 기준</h3>
+              <p class="subtle">변경 후 새로 만드는 공고 수집·분석·맞춤 문서 작업부터 적용됩니다.</p>
+              <div class="form-grid">
+                <label><span>화면 표시 이름</span><input id="settingsDisplayName" maxlength="160"></label>
+                <label><span>시간대</span><input id="settingsTimezone" maxlength="80" placeholder="Asia/Seoul"></label>
+                <label><span>목표 직무(줄바꿈 구분)</span><textarea id="settingsTargetRoles" rows="3"></textarea></label>
+                <label><span>사용자 정의 트랙(줄바꿈 구분)</span><textarea id="settingsTracks" rows="3"></textarea></label>
+                <label><span>희망 지역(줄바꿈 구분)</span><textarea id="settingsRegions" rows="3"></textarea></label>
+                <label><span>포함 키워드(줄바꿈 구분)</span><textarea id="settingsIncludeKeywords" rows="3"></textarea></label>
+                <label><span>제외 키워드(줄바꿈 구분)</span><textarea id="settingsExcludeKeywords" rows="3"></textarea></label>
+                <label><span>희망 업무(줄바꿈 구분)</span><textarea id="settingsDesiredWork" rows="3"></textarea></label>
+                <label><span>기피 업무(줄바꿈 구분)</span><textarea id="settingsAvoidedWork" rows="3"></textarea></label>
+              </div>
+              <section class="nested-settings">
+                <h4>맞춤 문서 품질 기준</h4>
+                <p class="subtle">활성 기준의 가중치 합계가 100이어야 하며, 다음 문서 생성부터 반영됩니다.</p>
+                <div id="settingsQualityCriteria" class="scoring-dimensions"></div>
+                <p id="settingsQualityCriteriaTotal" class="subtle"></p>
+                <div class="form-grid">
+                  <label><span>최소 작성 완성도</span><input id="settingsMinimumScore" type="number" min="0" max="100"></label>
+                  <label><span>PDF 최대 페이지</span><input id="settingsMaximumPages" type="number" min="1" max="10"></label>
+                </div>
+              </section>
+              <button class="primary-button" type="submit">개인 설정 저장</button>
+            </form>
             <article class="card settings-card">
               <h3>설정 파일</h3>
               <div id="configChecklist" class="checklist"></div>

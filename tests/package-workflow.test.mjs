@@ -508,6 +508,37 @@ test("named angle-bracket placeholders still block package approval", () => {
   }
 });
 
+test("user-selected generic document criteria affect quality score and evidence traceability", () => {
+  const content = {
+    sections: [{
+      key: "summary",
+      label: "경력 요약",
+      kind: "text",
+      value: "검증된 경험을 공고의 업무 기준과 연결해 구체적으로 작성한 맞춤 요약입니다.",
+      originalValue: "기존에 승인된 기본 요약입니다.",
+      source: "resume",
+      required: true,
+      minLength: 20,
+      sourceRefs: [],
+    }],
+    selection: { usedDefaultFocus: true, focusSections: [] },
+  };
+  const criteria = [
+    { id: "required_sections", label: "필수 항목 작성", enabled: true, weight: 25 },
+    { id: "placeholder_free", label: "미확정 문구 제거", enabled: true, weight: 25 },
+    { id: "evidence_traceability", label: "수정 내용의 근거 연결", enabled: true, weight: 50 },
+  ];
+  const missingEvidence = evaluatePackageQuality(content, { threshold: 80, criteria });
+  assert.equal(missingEvidence.score, 50);
+  assert.equal(missingEvidence.status, "review");
+  assert.equal(missingEvidence.decisions.find((item) => item.key === "criterion:evidence_traceability").passed, false);
+
+  content.sections[0].sourceRefs = ["evidence:example-1"];
+  const traced = evaluatePackageQuality(content, { threshold: 80, criteria });
+  assert.equal(traced.score, 100);
+  assert.equal(traced.status, "passed");
+});
+
 test("resume markdown and application answers are stored as separate artifacts", () => {
   const value = fixture();
   let packageValue;

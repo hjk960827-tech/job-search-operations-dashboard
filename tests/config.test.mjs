@@ -25,6 +25,10 @@ test("configuration validation rejects incomplete settings and unsafe source key
   incomplete.target_roles = [];
   assert.equal(validateConfig("search", incomplete).valid, false);
 
+  const invalidTimeZone = completedExample("profile");
+  invalidTimeZone.location.timezone = "not/a-real-zone";
+  assert.equal(validateConfig("profile", invalidTimeZone).issues.some((item) => item.includes("IANA time zone")), true);
+
   const sources = completedExample("sources");
   sources.sources["bad/platform"] = { label: "Bad", collect: true, display: true, lifecycle_check: true, priority: 10 };
   const result = validateConfig("sources", sources);
@@ -47,12 +51,14 @@ test("users can add a structurally valid custom job platform", () => {
 test("resume configuration exposes only active quality rules and rejects invalid bounds", () => {
   const resume = completedExample("resume");
   assert.deepEqual(Object.keys(resume).sort(), ["quality_rules", "setup_complete"]);
-  assert.deepEqual(Object.keys(resume.quality_rules).sort(), ["maximum_pdf_pages", "minimum_score"]);
+  assert.deepEqual(Object.keys(resume.quality_rules).sort(), ["criteria", "maximum_pdf_pages", "minimum_score"]);
+  assert.equal(resume.quality_rules.criteria.reduce((sum, item) => sum + (item.enabled ? item.weight : 0), 0), 100);
   resume.quality_rules.minimum_score = 101;
   resume.quality_rules.maximum_pdf_pages = 0;
+  resume.quality_rules.criteria.find((item) => item.id === "required_sections").enabled = false;
   const result = validateConfig("resume", resume);
   assert.equal(result.valid, false);
-  assert.equal(result.issues.length, 2);
+  assert.equal(result.issues.some((item) => item.includes("required_sections")), true);
 });
 
 test("demo examples load directly and configuration links are rejected", () => {
