@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(new URL("../scripts/git-identity-check.mjs", import.meta.url));
+const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 
 function createCommit(email) {
   const root = mkdtempSync(join(tmpdir(), "jobops-identity-"));
@@ -43,4 +44,14 @@ test("identity check blocks a personal-style email without printing it", () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /values omitted/);
   assert.equal(result.stderr.includes(unsafeEmail), false);
+});
+
+test("release policy blocks pull requests until web email privacy is confirmed", () => {
+  const agents = readFileSync(join(projectRoot, "AGENTS.md"), "utf8");
+  const releaseProcess = readFileSync(join(projectRoot, "docs", "RELEASE_PROCESS.md"), "utf8");
+
+  assert.match(agents, /Do not create a GitHub pull request unless/);
+  assert.match(agents, /local-noreply fast-forward update to `main`/);
+  assert.match(releaseProcess, /PR creation can immediately generate a synthetic/);
+  assert.match(releaseProcess, /Never force-push or rewrite `main`/);
 });
