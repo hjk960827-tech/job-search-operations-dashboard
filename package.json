@@ -26,9 +26,10 @@
     "test": "node --test",
     "test:pdf": "node scripts/pdf-smoke.mjs",
     "security:check": "node scripts/security-check.mjs",
+    "identity:check": "node scripts/git-identity-check.mjs",
     "isolation:check": "node scripts/isolation-check.mjs",
     "verify:app": "npm run test && npm run test:pdf && npm run isolation:check",
-    "verify:release": "npm run verify:app && npm run security:check",
+    "verify:release": "npm run verify:app && npm run security:check && npm run identity:check",
     "verify": "npm run verify:release"
   },
   "keywords": [
