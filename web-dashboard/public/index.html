@@ -10,13 +10,22 @@
   <body>
     <div class="shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">JOB SEARCH OPERATIONS</p>
-          <h1>Job Search Operations Dashboard</h1>
+        <div class="brand-and-nav">
+          <h1>JOB SEARCH OPS</h1>
+          <nav class="tabs" aria-label="주요 화면">
+            <button class="tab active" type="button" data-screen="home">작업함</button>
+            <button class="tab" type="button" data-screen="jobs">구직공고 대시보드</button>
+            <button class="tab" type="button" data-screen="resume">이력서 관리</button>
+            <button class="tab" type="button" data-screen="companion">에이전트 작업</button>
+            <button class="tab" type="button" data-screen="inbox">알림 <span id="inboxUnreadBadge" class="tab-badge" hidden>0</span></button>
+            <button class="tab" type="button" data-screen="settings">설정</button>
+          </nav>
         </div>
         <div class="topbar-actions">
+          <span id="lastUpdatedLabel" class="last-updated">데이터 확인 중</span>
           <span id="modeBadge" class="mode-badge">불러오는 중</span>
           <span id="displayName" class="profile-name"></span>
+          <button id="reloadButton" class="icon-button" type="button" aria-label="대시보드 새로고침" title="대시보드 새로고침">↻</button>
         </div>
       </header>
 
@@ -29,15 +38,6 @@
         <strong>GitHub 임시 환경에서 실행 중</strong>
         <span>이 공간은 GitHub 서버에 저장됩니다. 기능 확인에는 합성 문서를 사용하고, 실제 이력서·연락처·AI 계정은 개인 컴퓨터에서 등록해 주세요.</span>
       </div>
-
-      <nav class="tabs" aria-label="주요 화면">
-        <button class="tab active" type="button" data-screen="home">홈·작업함</button>
-        <button class="tab" type="button" data-screen="jobs">공고 관리</button>
-        <button class="tab" type="button" data-screen="inbox">알림함 <span id="inboxUnreadBadge" class="tab-badge" hidden>0</span></button>
-        <button class="tab" type="button" data-screen="companion">에이전트 작업</button>
-        <button class="tab" type="button" data-screen="resume">이력서 기준</button>
-        <button class="tab" type="button" data-screen="settings">초기 설정</button>
-      </nav>
 
       <main>
         <section id="onboardingScreen" class="screen onboarding-screen" hidden>
@@ -235,31 +235,18 @@
         </section>
 
         <section id="jobsScreen" class="screen" hidden>
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">JOB BOARD</p>
-              <h2>확인할 공고</h2>
-            </div>
-            <div id="jobCount" class="count-pill">0건</div>
+          <div id="jobQuickTabs" class="job-quick-tabs card" aria-label="빠른 공고 분류">
+            <button class="quick-tab active" type="button" data-quick-kind="all">전체 공고</button>
+            <button class="quick-tab" type="button" data-quick-kind="favorite">관심 공고</button>
+            <button class="quick-tab" type="button" data-quick-kind="applied">지원 완료</button>
+            <button class="quick-tab" type="button" data-quick-kind="skipped">제외 목록</button>
+            <span id="trackQuickTabs" class="track-quick-tabs"></span>
           </div>
 
           <div class="filters card">
-            <label>
-              <span>저장 필터</span>
-              <select id="savedFilterSelect"><option value="">직접 설정</option></select>
-            </label>
-            <label>
-              <span>필터 이름</span>
-              <input id="savedFilterName" maxlength="80" placeholder="현재 조건 저장">
-            </label>
-            <div class="saved-filter-actions">
-              <label class="favorite-filter"><input id="savedFilterDefault" type="checkbox"><span>시작 필터</span></label>
-              <button id="saveCurrentFilter" class="secondary-button" type="button">저장</button>
-              <button id="deleteSavedFilter" class="text-button" type="button">삭제</button>
-            </div>
-            <label>
+            <label class="filter-search">
               <span>검색</span>
-              <input id="searchInput" type="search" placeholder="회사명 또는 직무명">
+              <input id="searchInput" type="search" placeholder="회사, 포지션, 키워드 검색">
             </label>
             <label>
               <span>직무 트랙</span>
@@ -311,10 +298,39 @@
               <input id="favoriteFilter" type="checkbox">
               <span>관심 공고만</span>
             </label>
+            <button id="resetFiltersButton" class="secondary-button reset-filter-button" type="button">↻ 필터 초기화</button>
+            <details class="saved-filter-panel">
+              <summary>필터 저장</summary>
+              <div class="saved-filter-grid">
+                <label><span>저장 필터</span><select id="savedFilterSelect"><option value="">직접 설정</option></select></label>
+                <label><span>필터 이름</span><input id="savedFilterName" maxlength="80" placeholder="현재 조건 저장"></label>
+                <div class="saved-filter-actions">
+                  <label class="favorite-filter"><input id="savedFilterDefault" type="checkbox"><span>시작 필터</span></label>
+                  <button id="saveCurrentFilter" class="secondary-button" type="button">저장</button>
+                  <button id="deleteSavedFilter" class="text-button" type="button">삭제</button>
+                </div>
+              </div>
+            </details>
           </div>
 
+          <div id="jobStatusSummary" class="job-status-summary" aria-label="지원 작업 현황"></div>
+
           <div class="job-layout">
-            <div id="jobList" class="job-list" aria-live="polite"></div>
+            <section class="job-table-shell card">
+              <div class="job-table-titlebar">
+                <strong>공고 목록 <span id="jobCount">0건</span></strong>
+                <span class="subtle">공고를 선택하면 오른쪽에서 상세 내용과 다음 작업을 확인할 수 있습니다.</span>
+              </div>
+              <div class="job-table-head" aria-hidden="true">
+                <span>점수</span><span>회사</span><span>포지션</span><span>트랙</span><span>마감</span><span>플랫폼</span><span>상태</span><span>관심</span>
+              </div>
+              <div id="jobList" class="job-list" aria-live="polite"></div>
+              <div id="jobPagination" class="pagination-controls">
+                <button id="previousJobPage" class="secondary-button" type="button">이전</button>
+                <span id="jobPageStatus" class="subtle">1 / 1</span>
+                <button id="nextJobPage" class="secondary-button" type="button">다음</button>
+              </div>
+            </section>
             <aside id="jobDetail" class="job-detail card">
               <div class="empty-state">
                 <span>↗</span>
@@ -322,11 +338,6 @@
                 <p>대표 링크, 다른 출처와 지원 상태를 함께 확인할 수 있습니다.</p>
               </div>
             </aside>
-          </div>
-          <div id="jobPagination" class="pagination-controls">
-            <button id="previousJobPage" class="secondary-button" type="button">이전</button>
-            <span id="jobPageStatus" class="subtle">1 / 1</span>
-            <button id="nextJobPage" class="secondary-button" type="button">다음</button>
           </div>
         </section>
 

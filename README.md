@@ -6,7 +6,7 @@
 
 공고 출처 비교, 중복 정리, 관심·지원 상태, 이력서 작성 기준을 하나의 로컬
 대시보드에서 관리하는 프로젝트입니다. 첫 실행은 실제 개인정보가 없는 합성
-예시 데이터로 시작합니다. 현재 버전은 `0.3.1`입니다.
+예시 데이터로 시작합니다. 현재 버전은 `0.4.0`입니다.
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&repo=1298501275&skip_quickstart=true)
 
@@ -32,6 +32,10 @@
 - DB 스키마 변경 전 로컬 백업을 만들고, 실패하면 변경 전 파일로 복구합니다.
 - 등록 문서는 보존 기간만으로 자동 삭제하지 않으며 비활성 문서에 대한 명시적 삭제 명령만 제공합니다.
 - 잡플래닛 평점·리뷰 수집·분석 기능은 제공하지 않습니다.
+
+V2와 후속 V3 프론트엔드는 같은 로컬 백엔드를 사용합니다. 지원 기능과 쓰기 가능
+여부는 `GET /api/ui-contract`의 버전 계약을 기준으로 판단하며, 상세 이관 순서는
+[프론트엔드 구조 문서](docs/FRONTEND_ARCHITECTURE.md)에 정리되어 있습니다.
 
 ## 빠른 시작
 

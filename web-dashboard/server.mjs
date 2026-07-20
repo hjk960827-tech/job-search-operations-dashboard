@@ -45,6 +45,11 @@ import {
 } from "../lib/package-workflow.mjs";
 import { buildWorkflowOverview } from "../lib/workflow.mjs";
 import {
+  buildUiContract,
+  UI_CONTRACT_ID,
+  UI_CONTRACT_SCHEMA_VERSION,
+} from "../lib/ui-contract.mjs";
+import {
   saveStructuredResumeItems,
   updateResumeAsset,
 } from "../lib/structured-records.mjs";
@@ -330,6 +335,7 @@ function dashboardPayload() {
       sources: onboarding.sources.items || {},
       scoreReviewBelow: Number(onboarding.search.scoring?.reviewBelow ?? 70),
       onboarding,
+      uiContract: buildUiContract({ mode: runtime.mode }),
       companionTasks: [],
       inbox: { items: [], unreadCount: 0 },
       outcomeEventTypes: outcomeEventTypes(),
@@ -360,6 +366,7 @@ function dashboardPayload() {
     companionTasks: runtime.mode === "personal" ? listCompanionTasks(runtime.db) : [],
     inbox: runtime.mode === "personal" ? listLocalNotifications(runtime.db, { limit: 100 }) : { items: [], unreadCount: 0 },
     outcomeEventTypes: outcomeEventTypes(),
+    uiContract: buildUiContract({ mode: runtime.mode }),
   };
 }
 
@@ -391,6 +398,7 @@ function bootstrapPayload() {
     outcomeEventTypes: outcomeEventTypes(),
     savedFilters: runtime.mode === "personal" ? listSavedFilters(runtime.db) : [],
     revisions: databaseRevisions(runtime.db),
+    uiContract: buildUiContract({ mode: runtime.mode }),
   };
 }
 
@@ -458,6 +466,10 @@ const server = http.createServer(async (request, response) => {
     const baseHost = host.includes(":") ? `[${host}]` : host;
     const url = new URL(requestPath, `http://${baseHost}:${port}`);
     protectLocalRequest({ method: request.method, pathname: url.pathname, headers: request.headers, port, mode: runtime.mode });
+    if (request.method === "GET" && url.pathname === "/api/ui-contract") {
+      sendJson(response, 200, buildUiContract({ mode: runtime.mode }));
+      return;
+    }
     if (request.method === "GET" && url.pathname === "/api/health") {
       sendJson(response, 200, {
         ok: true,
@@ -466,6 +478,10 @@ const server = http.createServer(async (request, response) => {
         onboardingRequired: runtime.onboardingRequired,
         port,
         database: runtime.dbPath ? path.basename(runtime.dbPath) : null,
+        uiContract: {
+          contractId: UI_CONTRACT_ID,
+          schemaVersion: UI_CONTRACT_SCHEMA_VERSION,
+        },
       });
       return;
     }

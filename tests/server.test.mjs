@@ -55,10 +55,22 @@ test("server exposes demo data, blocks every mutation, and prevents local reques
     assert.equal(health.ok, true);
     assert.equal(health.mode, "demo");
     assert.equal(health.database, dbName);
+    assert.equal(health.uiContract.contractId, "job-search-operations-ui");
+    assert.equal(health.uiContract.schemaVersion, 1);
+
+    const uiContract = await fetch(`http://127.0.0.1:${port}/api/ui-contract`).then((response) => response.json());
+    assert.deepEqual(uiContract.frontendVersions, ["v2", "v3"]);
+    assert.equal(uiContract.defaultFrontend, "v2");
+    assert.deepEqual(uiContract.capabilities.jobs, { available: true, writable: false });
+    assert.deepEqual(uiContract.capabilities.automaticSubmission, { available: false, writable: false });
 
     const dashboard = await fetch(`http://127.0.0.1:${port}/api/dashboard`).then((response) => response.json());
     assert.equal(dashboard.jobs.length, 3);
     assert.equal(dashboard.onboardingRequired, true);
+    assert.deepEqual(dashboard.uiContract, uiContract);
+
+    const bootstrap = await fetch(`http://127.0.0.1:${port}/api/bootstrap`).then((response) => response.json());
+    assert.deepEqual(bootstrap.uiContract, uiContract);
 
     const mutations = [
       ["PATCH", "/api/jobs/1/state"],

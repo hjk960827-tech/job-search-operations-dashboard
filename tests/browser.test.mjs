@@ -69,6 +69,10 @@ test("demo dashboard loads as read-only and archived status filters remain usabl
     assert.equal(await page.locator("#workflowScreen").isVisible(), true);
     assert.equal(await page.locator("#workflowQueues .workflow-task").count(), 3);
     await page.locator('[data-screen="jobs"]').click();
+    assert.equal(await page.getByText("지도 보기", { exact: true }).count(), 0);
+    assert.equal(await page.getByText("회사 평판", { exact: true }).count(), 0);
+    assert.equal(await page.getByText("최근 리뷰", { exact: true }).count(), 0);
+    assert.equal(await page.locator("#jobQuickTabs .quick-tab").count() >= 4, true);
     assert.equal(await page.locator("#jobList .discovery-badge.new").count(), 1);
     assert.equal(await page.locator("#jobList .job-card").count(), 3);
     assert.match(await page.locator("#jobList .job-card").first().innerText(), /D-\d+ · 2099-12-31/);
@@ -79,7 +83,7 @@ test("demo dashboard loads as read-only and archived status filters remain usabl
     assert.match(await page.locator("#jobList .job-card").first().innerText(), /Product Designer/);
     await page.locator("#deadlineFilter").selectOption("");
     await page.locator("#jobList .job-card").first().click();
-    assert.equal(await page.locator("#jobDetail button:not([disabled])").count(), 0);
+    assert.equal(await page.locator("#jobDetail button:not([disabled]):not(.detail-close-button)").count(), 0);
 
     await page.locator("#statusFilter").selectOption("rejected");
     assert.equal(await page.locator("#lifecycleFilter").inputValue(), "all");
@@ -89,6 +93,8 @@ test("demo dashboard loads as read-only and archived status filters remain usabl
     await page.locator('[data-screen="resume"]').click();
     assert.equal(await page.locator("#resumeForm input:not([disabled]), #resumeForm textarea:not([disabled]), #resumeForm select:not([disabled]), #resumeForm button:not([disabled])").count(), 0);
     assert.match(await page.locator("#exampleBanner").innerText(), /읽기 전용/);
+    await page.locator('[data-screen="settings"]').click();
+    assert.equal(await page.locator("#personalSettingsForm input:not([disabled]), #personalSettingsForm textarea:not([disabled]), #personalSettingsForm select:not([disabled]), #personalSettingsForm button:not([disabled])").count(), 0);
     await page.locator('[data-screen="companion"]').click();
     assert.equal(await page.locator("#companionScreen button:not([disabled])").count(), 0);
   } finally {
@@ -133,6 +139,7 @@ test("personal dashboard guides a new job through review, quality, approval, man
 
     await page.locator('[data-screen="jobs"]').click();
     assert.equal(await page.locator("#jobList .discovery-badge.new").count(), 1);
+    await page.locator(".saved-filter-panel summary").click();
     await page.locator("#savedFilterName").fill("Synthetic active view");
     await page.locator("#savedFilterDefault").check();
     const filterSaved = page.waitForResponse((response) => response.url().endsWith("/api/saved-filters") && response.request().method() === "POST");

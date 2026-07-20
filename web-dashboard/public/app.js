@@ -1,5 +1,6 @@
 const state = {
   data: null,
+  uiContract: null,
   selectedJobId: null,
   screen: "home",
   filters: { search: "", track: "", platform: "", status: "", lifecycle: "active", deadline: "", sort: "score", favorite: false },
@@ -88,10 +89,30 @@ function isReadOnlyDemo() {
   return state.data?.mode !== "personal";
 }
 
+function capabilityWritable(name) {
+  const value = state.uiContract?.capabilities?.[name];
+  return Boolean(value?.available && value?.writable);
+}
+
 function protectDemoControl(control) {
   if (isReadOnlyDemo()) {
     control.disabled = true;
     control.title = "예시 모드는 읽기 전용입니다. 개인 설정을 완료한 뒤 사용할 수 있습니다.";
+  }
+  return control;
+}
+
+function protectBackendControl(control, { capability = "", job = null, action = "" } = {}) {
+  protectDemoControl(control);
+  const contractCapability = capability ? state.uiContract?.capabilities?.[capability] : null;
+  if (!control.disabled && contractCapability && (!contractCapability.available || !contractCapability.writable)) {
+    control.disabled = true;
+    control.title = "현재 실행 모드의 백엔드에서는 이 기능을 사용할 수 없습니다.";
+  }
+  const actionValue = action ? job?.allowedActions?.[action] : null;
+  if (!control.disabled && actionValue && !actionValue.enabled) {
+    control.disabled = true;
+    control.title = actionValue.reason || "현재 공고 단계에서는 이 기능을 사용할 수 없습니다.";
   }
   return control;
 }
@@ -314,25 +335,34 @@ function createJobCard(job) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = `job-card${state.selectedJobId === job.id ? " active" : ""}`;
-  const body = document.createElement("div");
+
+  const score = document.createElement("span");
+  score.className = `job-score${job.score === null ? " empty" : ""}`;
+  const reviewBelow = Number(state.data.scoreReviewBelow ?? 70);
+  if (job.score !== null && Number(job.score) < reviewBelow) {
+    score.classList.add("caution");
+    score.title = "적합도 주의";
+  }
+  score.textContent = job.score === null ? "–" : Math.round(job.score);
+
+  const companyCell = document.createElement("div");
+  companyCell.className = "job-cell job-company-cell";
   const company = document.createElement("p");
   company.className = "job-company";
   company.textContent = `${job.application.favorite ? "★ " : ""}${job.companyName}`;
   if (job.application.favorite) company.classList.add("favorite-star");
+  companyCell.append(company);
+
+  const positionCell = document.createElement("div");
+  positionCell.className = "job-cell job-position-cell";
   const title = document.createElement("h3");
   title.textContent = job.title;
   const meta = document.createElement("div");
   meta.className = "job-meta";
-  for (const value of [job.track, job.location, job.employmentType, statusLabels[job.application.workflowStatus]]) {
+  for (const value of [job.location, job.employmentType]) {
     if (!value) continue;
     const span = document.createElement("span");
     span.textContent = value;
-    meta.append(span);
-  }
-  if (job.deadline) {
-    const span = document.createElement("span");
-    span.className = job.deadlineDays !== null && job.deadlineDays <= 7 ? "deadline-urgent" : "";
-    span.textContent = `${deadlineLabel(job)} · ${job.deadline}`;
     meta.append(span);
   }
   if (job.discovery?.isNew) {
@@ -348,18 +378,76 @@ function createJobCard(job) {
     span.title = job.discovery.reopenedAt ? `최근 재오픈 ${formatDateTime(job.discovery.reopenedAt)}` : "마감 후 다시 활성화된 공고";
     meta.append(span);
   }
-  body.append(company, title, meta);
-  const score = document.createElement("span");
-  score.className = `job-score${job.score === null ? " empty" : ""}`;
-  const reviewBelow = Number(state.data.scoreReviewBelow ?? 70);
-  if (job.score !== null && Number(job.score) < reviewBelow) {
-    score.classList.add("caution");
-    score.title = "적합도 주의";
-  }
-  score.textContent = job.score === null ? "–" : Math.round(job.score);
-  button.append(body, score);
+  positionCell.append(title, meta);
+
+  const track = document.createElement("span");
+  track.className = "job-cell job-chip-cell";
+  track.textContent = job.track || "미분류";
+
+  const deadline = document.createElement("span");
+  deadline.className = `job-cell job-deadline${job.deadlineDays !== null && job.deadlineDays <= 7 ? " deadline-urgent" : ""}`;
+  deadline.textContent = job.deadline ? `${deadlineLabel(job)} · ${job.deadline}` : "상시·미정";
+
+  const platform = document.createElement("span");
+  platform.className = "job-cell job-platform";
+  platform.textContent = job.primarySource?.platform ? sourceLabel(job.primarySource.platform) : "출처 확인";
+
+  const status = document.createElement("span");
+  status.className = `job-cell job-status job-status-${job.application.workflowStatus}`;
+  status.textContent = statusLabels[job.application.workflowStatus] || "확인 필요";
+
+  const favorite = document.createElement("span");
+  favorite.className = `job-cell job-favorite${job.application.favorite ? " active" : ""}`;
+  favorite.textContent = job.application.favorite ? "♥" : "♡";
+  favorite.setAttribute("aria-label", job.application.favorite ? "관심 공고" : "관심 없음");
+
+  button.append(score, companyCell, positionCell, track, deadline, platform, status, favorite);
   button.addEventListener("click", () => navigateToJob(job.id, job.workflow?.stage || "", { preserveFilters: true }));
   return button;
+}
+
+function renderQuickFilters() {
+  const dynamic = $("#trackQuickTabs");
+  dynamic.replaceChildren();
+  for (const value of (state.facets.tracks || []).filter(Boolean).slice(0, 4)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `quick-tab${state.filters.track === value ? " active" : ""}`;
+    button.dataset.quickKind = "track";
+    button.dataset.quickValue = value;
+    button.textContent = value;
+    dynamic.append(button);
+  }
+  for (const button of $$("#jobQuickTabs > .quick-tab")) {
+    const kind = button.dataset.quickKind;
+    const active = kind === "all"
+      ? !state.filters.track && !state.filters.favorite && !["applied", "skipped"].includes(state.filters.status)
+      : kind === "favorite"
+        ? state.filters.favorite
+        : state.filters.status === kind;
+    button.classList.toggle("active", active);
+  }
+}
+
+function renderJobStatusSummary() {
+  const overview = state.data.workflow || { counts: {}, total: 0 };
+  const items = [
+    ["전체", state.pagination.total],
+    ["검토", overview.counts?.review || 0],
+    ["보완 필요", overview.counts?.quality || 0],
+    ["승인 대기", overview.counts?.approval || 0],
+    ["제출 준비", overview.counts?.submission || 0],
+    ["후속조치", overview.counts?.followUp || 0],
+  ];
+  const container = $("#jobStatusSummary");
+  container.replaceChildren();
+  for (const [label, count] of items) {
+    const chip = document.createElement("span");
+    const strong = document.createElement("strong");
+    strong.textContent = count;
+    chip.append(strong, ` ${label}`);
+    container.append(chip);
+  }
 }
 
 function renderWorkflow() {
@@ -659,7 +747,7 @@ function renderCompanion() {
       cancel.className = "secondary-button";
       cancel.textContent = "작업 취소";
       cancel.addEventListener("click", () => updateCompanionTask(task.id, "cancel"));
-      protectDemoControl(cancel);
+      protectBackendControl(cancel, { capability: "companionQueue" });
       actions.append(cancel);
     }
     if (task.status === "failed" && task.attemptCount < task.maxAttempts) {
@@ -668,7 +756,7 @@ function renderCompanion() {
       retry.className = "primary-button";
       retry.textContent = "다시 시도";
       retry.addEventListener("click", () => updateCompanionTask(task.id, "retry"));
-      protectDemoControl(retry);
+      protectBackendControl(retry, { capability: "companionQueue" });
       actions.append(retry);
     }
     if (task.status === "succeeded" && task.review?.status === "awaiting_review") {
@@ -679,6 +767,7 @@ function renderCompanion() {
         prepare.className = "primary-button";
         prepare.textContent = "결과 미리보기";
         prepare.addEventListener("click", () => prepareCompanionReview(task.id));
+        protectBackendControl(prepare, { capability: "companionQueue" });
         actions.append(prepare);
       } else {
         card.append(companionDecisionRows(task, review));
@@ -692,6 +781,8 @@ function renderCompanion() {
         reject.className = "secondary-button";
         reject.textContent = "사용하지 않음";
         reject.addEventListener("click", () => rejectCompanionReview(task.id));
+        protectBackendControl(apply, { capability: "companionQueue" });
+        protectBackendControl(reject, { capability: "companionQueue" });
         actions.append(apply, reject);
       }
     }
@@ -708,8 +799,8 @@ function renderCompanion() {
     empty.append(title, copy);
     list.append(empty);
   }
-  protectDemoControl($("#queueJobCollection"));
-  protectDemoControl($("#queueDocumentAnalysis"));
+  protectBackendControl($("#queueJobCollection"), { capability: "jobCollectionRequest" });
+  protectBackendControl($("#queueDocumentAnalysis"), { capability: "documentAnalysisRequest" });
 }
 
 function renderInbox() {
@@ -746,7 +837,7 @@ function renderInbox() {
         navigateToJob(item.jobId, "outcomes");
       } catch (error) { showToast(error.message, true); }
     });
-    protectDemoControl(open);
+    protectBackendControl(open, { capability: "localNotifications" });
     card.append(copy, open);
     list.append(card);
   }
@@ -1061,6 +1152,8 @@ async function loadJobOutcomes(job, panel) {
 function renderJobs() {
   const jobs = filteredJobs();
   $("#jobCount").textContent = `${state.pagination.total}건`;
+  renderQuickFilters();
+  renderJobStatusSummary();
   const list = $("#jobList");
   list.replaceChildren(...jobs.map(createJobCard));
   if (!jobs.length) {
@@ -1091,9 +1184,30 @@ function renderDetail(jobId, suppliedJob = null) {
   detail.replaceChildren();
   if (!job) return;
 
+  const headingRow = document.createElement("div");
+  headingRow.className = "detail-heading-row";
   const company = document.createElement("p");
   company.className = "detail-company";
   company.textContent = job.companyName;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "detail-close-button";
+  close.setAttribute("aria-label", "공고 상세 닫기");
+  close.textContent = "×";
+  close.addEventListener("click", () => {
+    state.selectedJobId = null;
+    renderJobs();
+    detail.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "empty-state detail-empty-state";
+    const emptyTitle = document.createElement("strong");
+    emptyTitle.textContent = "공고를 선택해 주세요";
+    const emptyCopy = document.createElement("p");
+    emptyCopy.textContent = "목록에서 공고를 선택하면 출처와 지원 문서 작업 단계를 확인할 수 있습니다.";
+    empty.append(emptyTitle, emptyCopy);
+    detail.append(empty);
+  });
+  headingRow.append(company, close);
   const title = document.createElement("h3");
   title.className = "detail-title";
   title.textContent = job.title;
@@ -1126,7 +1240,14 @@ function renderDetail(jobId, suppliedJob = null) {
   const summary = document.createElement("p");
   summary.className = "detail-summary";
   summary.textContent = job.summary || "공고 요약이 아직 없습니다.";
-  detail.append(company, title, meta, summary);
+  const scoreSummary = document.createElement("div");
+  scoreSummary.className = "detail-score-summary";
+  const scoreValue = document.createElement("strong");
+  scoreValue.textContent = job.score === null ? "—" : String(Math.round(Number(job.score)));
+  const scoreCopy = document.createElement("span");
+  scoreCopy.textContent = job.score === null ? "평가 기준 설정 후 점수가 표시됩니다" : "공고 적합도";
+  scoreSummary.append(scoreValue, scoreCopy);
+  detail.append(headingRow, title, meta, scoreSummary, summary);
   if (job.workflow) {
     const workflow = document.createElement("section");
     workflow.className = "workflow-current";
@@ -1193,7 +1314,7 @@ function renderDetail(jobId, suppliedJob = null) {
     favorite.className = "secondary-button";
     favorite.textContent = job.application.favorite ? "관심 해제" : "관심 추가";
     favorite.addEventListener("click", () => saveState(job, { favorite: !job.application.favorite }));
-    protectDemoControl(favorite);
+    protectBackendControl(favorite, { capability: "jobState", job, action: "updateJobState" });
     actions.append(link, favorite);
     detail.append(actions);
   }
@@ -1237,7 +1358,7 @@ function renderDetail(jobId, suppliedJob = null) {
     statusSelect.append(option);
   }
   statusSelect.value = job.application.workflowStatus;
-  protectDemoControl(statusSelect);
+  protectBackendControl(statusSelect, { capability: "jobState", job, action: "updateJobState" });
   statusLabel.append(statusCaption, statusSelect);
   const noteLabel = document.createElement("label");
   const noteCaption = document.createElement("span");
@@ -1246,14 +1367,14 @@ function renderDetail(jobId, suppliedJob = null) {
   note.rows = 4;
   note.maxLength = 2000;
   note.value = job.application.note;
-  protectDemoControl(note);
+  protectBackendControl(note, { capability: "jobState", job, action: "updateJobState" });
   noteLabel.append(noteCaption, note);
   const save = document.createElement("button");
   save.type = "button";
   save.className = "primary-button";
   save.textContent = "상태 저장";
   save.addEventListener("click", () => saveState(job, { workflowStatus: statusSelect.value, note: note.value }));
-  protectDemoControl(save);
+  protectBackendControl(save, { capability: "jobState", job, action: "updateJobState" });
   statePanel.append(statusLabel, noteLabel, save);
   detail.append(statePanel);
   detail.append(renderPackagePanel(job));
@@ -1328,13 +1449,13 @@ function publicSummaryFromDetail(job) {
   };
 }
 
-function packageAction(label, className, handler) {
+function packageAction(label, className, handler, options = {}) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = className;
   button.textContent = label;
   button.addEventListener("click", handler);
-  return protectDemoControl(button);
+  return protectBackendControl(button, options);
 }
 
 function renderPackagePanel(job) {
@@ -1353,7 +1474,7 @@ function renderPackagePanel(job) {
     if (job.workflow?.stage === "review") {
       const start = packageAction("공고 검토 시작", "primary-button", async () => {
         await saveState(job, { workflowStatus: "reviewing" }, "공고 검토를 시작했습니다.");
-      });
+      }, { capability: "jobState", job, action: "startReview" });
       panel.append(copy, start);
     } else if (job.workflow?.stage === "draft") {
       const create = packageAction("공고별 작업본 만들기", "primary-button", async () => {
@@ -1362,10 +1483,10 @@ function renderPackagePanel(job) {
           applyJobs(payload, job.id);
           showToast("공고별 작업본을 만들었습니다.");
         } catch (error) { showToast(error.message, true); }
-      });
+      }, { capability: "packageWorkflow", job, action: "createPackage" });
       const queue = packageAction("에이전트 문서 생성 요청", "secondary-button", () => {
         createCompanionRequest("generate_package", { jobId: job.id });
-      });
+      }, { capability: "packageGenerationRequest", job, action: "requestPackageGeneration" });
       panel.append(copy, create, queue);
     } else {
       const unavailable = document.createElement("p");
@@ -1387,7 +1508,7 @@ function renderPackagePanel(job) {
   if (!isReadOnlyDemo() && ["draft", "quality", "approval"].includes(job.workflow?.stage)) {
     const queue = packageAction("에이전트 문서 생성 요청", "secondary-button", () => {
       createCompanionRequest("generate_package", { jobId: job.id });
-    });
+    }, { capability: "packageGenerationRequest", job, action: "requestPackageGeneration" });
     panel.append(queue);
   }
 
@@ -1465,7 +1586,7 @@ function renderPackagePanel(job) {
           applyJobs(payload, job.id);
           showToast("현재 기준으로 새 문서 버전을 만들었습니다.");
         } catch (error) { showToast(error.message, true); }
-      }));
+      }, { capability: "packageWorkflow", job, action: "refreshPackage" }));
     }
     panel.append(refreshNotice);
   } else if (packageLocked) {
@@ -1518,7 +1639,7 @@ function renderPackagePanel(job) {
         applyJobs(payload, job.id);
         showToast("수정 내용과 이전 버전을 안전하게 저장했습니다.");
       } catch (error) { showToast(error.message, true); }
-    }));
+    }, { capability: "packageWorkflow", job, action: "editPackage" }));
     if (packageValue.state === "approval_pending") {
       actions.append(packageAction("문안 승인·PDF 생성", "primary-button", async () => {
         try {
@@ -1529,7 +1650,7 @@ function renderPackagePanel(job) {
           applyJobs(payload, job.id);
           showToast("현재 문안으로 PDF를 생성하고 승인했습니다.");
         } catch (error) { showToast(error.message, true); }
-      }));
+      }, { capability: "packageWorkflow", job, action: "approvePackage" }));
     }
     form.append(actions);
     panel.append(form);
@@ -1564,13 +1685,10 @@ function renderPackagePanel(job) {
         applyJobs(payload, job.id);
         showToast("수기 제출할 PDF를 확정했습니다. 채용 플랫폼에서 직접 지원해 주세요.");
       } catch (error) { showToast(error.message, true); }
-    });
-    prepare.disabled = isReadOnlyDemo() || !manualSubmissionReady;
-    prepare.title = isReadOnlyDemo()
-      ? "예시 모드는 읽기 전용입니다."
-      : manualSubmissionReady
-        ? "승인된 PDF를 확정하고 수기 제출 단계로 이동합니다."
-        : "문안 승인과 PDF 준비 상태를 먼저 확인해 주세요.";
+    }, { capability: "manualSubmission", job, action: "prepareSubmission" });
+    prepare.disabled = prepare.disabled || !manualSubmissionReady;
+    if (!prepare.disabled) prepare.title = "승인된 PDF를 확정하고 수기 제출 단계로 이동합니다.";
+    else if (!prepare.title) prepare.title = "문안 승인과 PDF 준비 상태를 먼저 확인해 주세요.";
     panel.append(prepare);
   }
   if (packageValue.state === "submit_ready" && !packageLocked) {
@@ -1580,7 +1698,7 @@ function renderPackagePanel(job) {
         applyJobs(payload, job.id);
         showToast("확정된 제출본을 기준으로 수기 제출 완료를 기록했습니다.");
       } catch (error) { showToast(error.message, true); }
-    }));
+    }, { capability: "manualSubmission", job, action: "recordSubmitted" }));
   }
   if (packageValue.state === "submitted") {
     const frozen = document.createElement("p");
@@ -2082,6 +2200,7 @@ async function deleteOnboardingFile(kind) {
 }
 
 function bindOnboardingEvents() {
+  $("#reloadButton").addEventListener("click", () => window.location.reload());
   $("#setupScoringDimensions").addEventListener("input", updateScoringWeightTotal);
   $("#setupScoringDimensions").addEventListener("change", updateScoringWeightTotal);
   $("#setupQualityCriteria").addEventListener("input", () => updateQualityCriteriaTotal("onboarding"));
@@ -2170,7 +2289,7 @@ function renderResume() {
     const selected = document.createElement("input");
     selected.type = "checkbox";
     selected.dataset.analysisDocumentId = asset.id;
-    selected.disabled = isReadOnlyDemo() || asset.status === "archived";
+    selected.disabled = !capabilityWritable("documents") || asset.status === "archived";
     selected.setAttribute("aria-label", `${asset.label || asset.originalName} 분석 선택`);
     const label = document.createElement("strong");
     label.textContent = asset.label || asset.originalName;
@@ -2186,7 +2305,7 @@ function renderResume() {
       select.append(option);
     }
     select.value = asset.status || "active";
-    select.disabled = isReadOnlyDemo();
+    select.disabled = !capabilityWritable("documents");
     select.addEventListener("change", async () => {
       try {
         const payload = await request(`/api/resume/assets/${encodeURIComponent(asset.id)}`, {
@@ -2297,8 +2416,8 @@ function renderResume() {
   }
   $("#resumeSavedAt").textContent = resume.updatedAt ? `마지막 저장 ${formatDateTime(resume.updatedAt)}` : "";
   for (const control of $("#resumeForm").querySelectorAll("input, textarea, select, button")) {
-    control.disabled = isReadOnlyDemo() || control.id === "resumeYearsExperience" && resume.careerType !== "experienced";
-    if (isReadOnlyDemo()) control.title = "예시 모드는 읽기 전용입니다.";
+    control.disabled = !capabilityWritable("resumeManagement") || control.id === "resumeYearsExperience" && resume.careerType !== "experienced";
+    if (!capabilityWritable("resumeManagement")) control.title = "현재 실행 모드에서는 이력서 기준을 수정할 수 없습니다.";
   }
 }
 
@@ -2425,7 +2544,7 @@ function renderSettings() {
       checkbox.type = "checkbox";
       checkbox.dataset.sourceField = field;
       checkbox.checked = item[field] !== false && (field !== "collect" || item[field] === true);
-      checkbox.disabled = isReadOnlyDemo() || !state.personalSettings;
+      checkbox.disabled = !capabilityWritable("settings") || !state.personalSettings;
       label.append(checkbox, document.createTextNode(textValue));
       controls.append(label);
     }
@@ -2434,7 +2553,7 @@ function renderSettings() {
     priority.dataset.sourceField = "priority";
     priority.value = item.priority;
     priority.setAttribute("aria-label", `${item.label || key} 대표 링크 순서`);
-    priority.disabled = isReadOnlyDemo() || !state.personalSettings;
+    priority.disabled = !capabilityWritable("settings") || !state.personalSettings;
     controls.append(priority);
     row.append(name, controls);
     sources.append(row);
@@ -2475,6 +2594,10 @@ function renderSettings() {
   }
   renderQualityCriteria("#settingsQualityCriteria", "#settingsQualityCriteriaTotal",
     state.personalSettings?.resume?.quality_rules?.criteria || defaultDocumentQualityCriteria, "settings");
+  for (const control of $("#personalSettingsForm").querySelectorAll("input, textarea, select, button")) {
+    control.disabled = !capabilityWritable("settings") || !state.personalSettings;
+    if (!capabilityWritable("settings")) control.title = "현재 실행 모드에서는 개인 설정을 수정할 수 없습니다.";
+  }
 }
 
 function renderDocumentManager() {
@@ -2494,11 +2617,11 @@ function renderDocumentManager() {
     replace.append(option);
   }
   replace.value = [...replace.options].some((item) => item.value === current) ? current : "";
-  protectDemoControl($("#personalDocumentKind"));
-  protectDemoControl(replace);
-  protectDemoControl($("#personalDocumentFile"));
-  protectDemoControl($("#personalDocumentForm button"));
-  protectDemoControl($("#reanalyzeDocuments"));
+  protectBackendControl($("#personalDocumentKind"), { capability: "documents" });
+  protectBackendControl(replace, { capability: "documents" });
+  protectBackendControl($("#personalDocumentFile"), { capability: "documents" });
+  protectBackendControl($("#personalDocumentForm button"), { capability: "documents" });
+  protectBackendControl($("#reanalyzeDocuments"), { capability: "documentAnalysisRequest" });
 }
 
 function syncFilterControls() {
@@ -2526,11 +2649,11 @@ function renderSavedFilters() {
     select.append(option);
   }
   select.value = (state.data.savedFilters || []).some((item) => item.id === current) ? current : "";
-  protectDemoControl(select);
-  protectDemoControl($("#savedFilterName"));
-  protectDemoControl($("#savedFilterDefault"));
-  protectDemoControl($("#saveCurrentFilter"));
-  protectDemoControl($("#deleteSavedFilter"));
+  protectBackendControl(select, { capability: "savedFilters" });
+  protectBackendControl($("#savedFilterName"), { capability: "savedFilters" });
+  protectBackendControl($("#savedFilterDefault"), { capability: "savedFilters" });
+  protectBackendControl($("#saveCurrentFilter"), { capability: "savedFilters" });
+  protectBackendControl($("#deleteSavedFilter"), { capability: "savedFilters" });
   $("#deleteSavedFilter").disabled = isReadOnlyDemo() || !select.value;
 }
 
@@ -2542,6 +2665,7 @@ async function refreshJobFilters() {
 
 function renderAll() {
   renderEnvironmentNotice();
+  $("#lastUpdatedLabel").textContent = `최종 확인 ${formatDateTime(new Date().toISOString())}`;
   if (state.data.mode === "onboarding") {
     state.onboarding = state.data.onboarding;
     renderOnboarding();
@@ -2574,6 +2698,29 @@ function bindEvents() {
       loadPersonalSettings().catch((error) => showToast(error.message, true));
     }
   }));
+  $("#reloadButton").addEventListener("click", () => {
+    refreshDashboardData()
+      .then(() => showToast("대시보드를 새로고침했습니다."))
+      .catch((error) => showToast(error.message, true));
+  });
+  $("#jobQuickTabs").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-quick-kind]");
+    if (!button) return;
+    const kind = button.dataset.quickKind;
+    state.filters.favorite = kind === "favorite";
+    state.filters.status = kind === "applied" ? "applied" : kind === "skipped" ? "skipped" : "";
+    state.filters.track = kind === "track" ? button.dataset.quickValue || "" : "";
+    state.filters.lifecycle = ["applied", "skipped"].includes(kind) ? "all" : "active";
+    state.pagination.page = 1;
+    syncFilterControls();
+    loadJobPage({ force: true }).catch((error) => showToast(error.message, true));
+  });
+  $("#resetFiltersButton").addEventListener("click", () => {
+    state.filters = { search: "", track: "", platform: "", status: "", lifecycle: "active", deadline: "", sort: "score", favorite: false };
+    state.pagination.page = 1;
+    syncFilterControls();
+    loadJobPage({ force: true }).catch((error) => showToast(error.message, true));
+  });
   $("#queueJobCollection").addEventListener("click", () => createCompanionRequest("collect_jobs"));
   $("#queueDocumentAnalysis").addEventListener("click", () => createCompanionRequest("analyze_documents"));
   $("#searchInput").addEventListener("input", (event) => {
@@ -2816,7 +2963,10 @@ function bindEvents() {
 
 async function initialize() {
   try {
-    state.data = await request("/api/bootstrap");
+    [state.uiContract, state.data] = await Promise.all([
+      request("/api/ui-contract"),
+      request("/api/bootstrap"),
+    ]);
     let workflowPromise = null;
     if (state.data.mode !== "onboarding") {
       const initialFilter = (state.data.savedFilters || []).find((item) => item.isDefault);

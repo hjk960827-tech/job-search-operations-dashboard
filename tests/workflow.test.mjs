@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildWorkflowOverview, deriveJobWorkflow } from "../lib/workflow.mjs";
+import { buildWorkflowOverview, deriveJobAllowedActions, deriveJobWorkflow } from "../lib/workflow.mjs";
 
 function job(overrides = {}) {
   return {
@@ -43,6 +43,40 @@ test("stale packages require an explicit refresh only when refresh is available"
   const unavailable = deriveJobWorkflow(job({ package: { state: "approved", refreshRequired: true, refreshAvailable: false } }));
   assert.equal(unavailable.stage, "quality");
   assert.equal(unavailable.nextAction, null);
+});
+
+test("backend exposes the exact job actions the frontend may enable", () => {
+  const review = job();
+  review.workflow = deriveJobWorkflow(review);
+  assert.equal(deriveJobAllowedActions(review).startReview.enabled, true);
+  assert.equal(deriveJobAllowedActions(review).createPackage.enabled, false);
+
+  const draft = job({ application: { workflowStatus: "reviewing" } });
+  draft.workflow = deriveJobWorkflow(draft);
+  assert.equal(deriveJobAllowedActions(draft).createPackage.enabled, true);
+  assert.equal(deriveJobAllowedActions(draft).requestPackageGeneration.requiresCompanion, true);
+
+  const approved = job({ package: {
+    state: "approved",
+    refreshRequired: false,
+    refreshAvailable: true,
+    checksum: "same",
+    approvedChecksum: "same",
+    pdf: { available: true },
+  } });
+  approved.workflow = deriveJobWorkflow(approved);
+  assert.equal(deriveJobAllowedActions(approved).editPackage.enabled, true);
+  assert.equal(deriveJobAllowedActions(approved).prepareSubmission.enabled, true);
+
+  approved.package.approvedChecksum = "old";
+  const staleApproval = deriveJobAllowedActions(approved).prepareSubmission;
+  assert.equal(staleApproval.enabled, false);
+  assert.match(staleApproval.reason, /PDF/);
+
+  const closed = job({ status: "closed" });
+  closed.workflow = deriveJobWorkflow(closed);
+  assert.equal(deriveJobAllowedActions(closed).startReview.enabled, false);
+  assert.match(deriveJobAllowedActions(closed).startReview.reason, /마감/);
 });
 
 test("workbox groups the same derived records into review, quality, approval, and submission queues", () => {
