@@ -1,0 +1,21 @@
+{
+  "name": "Job Search Operations Dashboard",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "forwardPorts": [8766],
+  "portsAttributes": {
+    "8766": {
+      "label": "Job Search Operations Dashboard",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "postCreateCommand": "npm ci && npx playwright install --with-deps chromium",
+  "postAttachCommand": {
+    "dashboard": "npm run codespaces"
+  },
+  "customizations": {
+    "codespaces": {
+      "openFiles": ["docs/CODESPACES.md"]
+    }
+  },
+  "remoteUser": "node"
+}

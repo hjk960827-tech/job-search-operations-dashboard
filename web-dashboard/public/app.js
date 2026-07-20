@@ -1875,6 +1875,7 @@ function renderOnboarding() {
   $("#modeBadge").textContent = "초기 설정";
   $("#displayName").textContent = onboarding.profile.displayName || "";
   $("#exampleBanner").hidden = true;
+  renderEnvironmentNotice();
   $("#onboardingProgress").textContent = `${onboarding.currentStep} / 11`;
   const steps = $("#onboardingSteps");
   steps.replaceChildren();
@@ -1937,6 +1938,17 @@ function renderOnboarding() {
   inputValue("#setupMinimumScore", onboarding.resume.minimumScore ?? 80);
   inputValue("#setupMaximumPages", onboarding.resume.maximumPdfPages ?? 3);
   renderOnboardingPreview();
+}
+
+function renderEnvironmentNotice() {
+  const inCodespaces = state.data?.environment?.codespaces === true;
+  $("#codespacesBanner").hidden = !inCodespaces;
+  $("#onboardingStorageTitle").textContent = inCodespaces
+    ? "체험 자료는 내 GitHub 임시 공간에 저장됩니다"
+    : "개인 자료는 이 컴퓨터에만 저장됩니다";
+  $("#onboardingStorageDescription").textContent = inCodespaces
+    ? "등록한 문서와 설정은 Git에는 포함되지 않지만 이 Codespace가 삭제될 때까지 GitHub 서버에 남습니다. 기능 확인에는 합성 문서를 사용해 주세요."
+    : "등록한 문서, 분석 결과, 설정과 개인 DB는 Git에 포함되지 않는 로컬 비공개 영역에 저장됩니다.";
 }
 
 function collectAnalysisReview() {
@@ -2529,6 +2541,7 @@ async function refreshJobFilters() {
 }
 
 function renderAll() {
+  renderEnvironmentNotice();
   if (state.data.mode === "onboarding") {
     state.onboarding = state.data.onboarding;
     renderOnboarding();

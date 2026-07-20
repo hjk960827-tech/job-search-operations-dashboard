@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assertRuntimeSetup,
+  codespacesForwardedHost,
   isAllowedRequestHost,
   isAllowedRequestOrigin,
   isApplicationJson,
@@ -10,6 +11,13 @@ import {
   runtimeHost,
   runtimePort,
 } from "../lib/runtime.mjs";
+
+const codespacesEnv = {
+  CODESPACES: "true",
+  CODESPACE_NAME: "example-user-job-search-abc123",
+  GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: "app.github.dev",
+};
+const codespacesHost = "example-user-job-search-abc123-8766.app.github.dev";
 
 function fakeRequest(chunks, headers = {}) {
   return {
@@ -51,6 +59,37 @@ test("request host and origin accept only the configured local port", () => {
   assert.equal(isAllowedRequestOrigin("http://localhost:8766", 8766), true);
   assert.equal(isAllowedRequestOrigin("https://127.0.0.1:8766", 8766), false);
   assert.equal(isAllowedRequestOrigin("https://evil.example", 8766), false);
+});
+
+test("request host and origin accept only the exact private Codespaces forwarding address", () => {
+  assert.equal(codespacesForwardedHost(8766, codespacesEnv), codespacesHost);
+  assert.equal(isAllowedRequestHost(codespacesHost, 8766, codespacesEnv), true);
+  assert.equal(isAllowedRequestOrigin(`https://${codespacesHost}`, 8766, codespacesEnv), true);
+  assert.equal(isAllowedRequestHost(`other-${codespacesHost}`, 8766, codespacesEnv), false);
+  assert.equal(isAllowedRequestHost(`${codespacesHost}:8766`, 8766, codespacesEnv), false);
+  assert.equal(isAllowedRequestOrigin(`http://${codespacesHost}`, 8766, codespacesEnv), false);
+  assert.equal(isAllowedRequestOrigin(`https://${codespacesHost}.evil.example`, 8766, codespacesEnv), false);
+  assert.equal(codespacesForwardedHost(8766, { ...codespacesEnv, CODESPACE_NAME: "bad/name" }), null);
+  assert.equal(codespacesForwardedHost(8766, { ...codespacesEnv, GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: "localhost" }), null);
+  assert.doesNotThrow(() => protectLocalRequest({
+    method: "PATCH",
+    pathname: "/api/onboarding",
+    headers: { host: codespacesHost, origin: `https://${codespacesHost}`, "content-type": "application/json" },
+    port: 8766,
+    mode: "onboarding",
+    env: codespacesEnv,
+  }));
+  assert.throws(
+    () => protectLocalRequest({
+      method: "PATCH",
+      pathname: "/api/onboarding",
+      headers: { host: codespacesHost, origin: "https://evil.example", "content-type": "application/json" },
+      port: 8766,
+      mode: "onboarding",
+      env: codespacesEnv,
+    }),
+    (error) => error.statusCode === 403,
+  );
 });
 
 test("central request guard makes every demo API mutation read-only", () => {
