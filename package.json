@@ -1,6 +1,6 @@
 {
   "name": "job-search-operations-dashboard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Korea-first, multi-role job search operations dashboard for Codex and Claude users",
   "type": "module",
@@ -8,11 +8,19 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "doctor": "node scripts/doctor.mjs",
     "setup": "node scripts/setup.mjs",
     "onboarding": "node scripts/start-mode.mjs onboarding",
     "personal": "node scripts/start-mode.mjs personal",
     "hooks:install": "node scripts/install-hooks.mjs",
     "db:init": "node scripts/init-db.mjs",
+    "db:inspect": "node scripts/db-maintenance.mjs inspect",
+    "db:backup": "node scripts/db-maintenance.mjs backup",
+    "db:export": "node scripts/db-maintenance.mjs export",
+    "db:restore": "node scripts/db-maintenance.mjs restore",
+    "privacy:prune": "node scripts/privacy-prune.mjs",
+    "companion": "node scripts/companion.mjs",
+    "collection": "node scripts/collection.mjs",
     "dashboard": "node web-dashboard/server.mjs",
     "start": "node web-dashboard/server.mjs",
     "test": "node --test",

@@ -1,14 +1,19 @@
 import fs from "node:fs";
 import http from "node:http";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { configStatus, loadConfig, loadExampleConfig } from "../lib/config.mjs";
 import {
+  databaseRevisions,
+  getJobDetail,
   getResume,
   importJob,
   initializeDatabase,
+  listJobPage,
   listJobs,
   openDatabase,
+  publicJobSummary,
   saveResume,
   updateApplicationState,
 } from "../lib/database.mjs";
@@ -38,6 +43,53 @@ import {
   recordSubmitted,
   updatePackage,
 } from "../lib/package-workflow.mjs";
+import { buildWorkflowOverview } from "../lib/workflow.mjs";
+import {
+  saveStructuredResumeItems,
+  updateResumeAsset,
+} from "../lib/structured-records.mjs";
+import {
+  cancelCompanionTask,
+  claimNextCompanionTask,
+  completeCompanionTask,
+  createCompanionTask,
+  failCompanionTask,
+  heartbeatCompanionTask,
+  listCompanionTasks,
+  retryCompanionTask,
+} from "../lib/companion-queue.mjs";
+import {
+  applyCompanionResultReview,
+  getCompanionResultReview,
+  patchCompanionResultReview,
+  prepareCompanionResultReview,
+  rejectCompanionResultReview,
+  supersedeStaleCompanionResults,
+} from "../lib/companion-results.mjs";
+import {
+  archivePersonalDocument,
+  getPersonalSettings,
+  savePersonalSettings,
+  uploadPersonalDocument,
+} from "../lib/personal-settings.mjs";
+import {
+  collectionAdapterContract,
+  getCollectionRun,
+  publishCollectionRun,
+  stageCollectionBatch,
+} from "../lib/collection-pipeline.mjs";
+import {
+  appendApplicationEvent,
+  appendApplicationEventCorrection,
+  createFollowUp,
+  listPendingFollowUps,
+  listJobOutcomes,
+  listLocalNotifications,
+  markNotificationRead,
+  outcomeEventTypes,
+  transitionFollowUp,
+} from "../lib/outcome-ledger.mjs";
+import { deleteSavedFilter, listSavedFilters, saveFilter } from "../lib/saved-filters.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(here, "public");
@@ -88,6 +140,14 @@ function activatePersonalRuntime() {
   runtime = createRuntime("personal");
 }
 
+function reloadPersonalConfiguration() {
+  runtime.setup = configStatus();
+  runtime.sourcesConfig = loadConfig("sources");
+  runtime.resumeConfig = loadConfig("resume");
+  runtime.searchConfig = loadConfig("search");
+  runtime.profileConfig = loadConfig("profile");
+}
+
 function packageQualityOptions() {
   const rules = runtime.resumeConfig?.quality_rules || {};
   const threshold = Number(rules.minimum_score ?? 80);
@@ -95,7 +155,22 @@ function packageQualityOptions() {
   return {
     threshold: Number.isFinite(threshold) ? Math.max(0, Math.min(100, threshold)) : 80,
     maximumPages: Number.isInteger(maximumPages) ? Math.max(1, Math.min(10, maximumPages)) : 3,
+    qualityCriteria: Array.isArray(rules.criteria) ? rules.criteria : undefined,
+    contact: selectedPdfContact(),
+    timeZone: runtime.profileConfig?.location?.timezone || "Asia/Seoul",
   };
+}
+
+function selectedPdfContact() {
+  if (runtime.mode !== "personal") return [];
+  const identity = runtime.profileConfig?.identity || {};
+  const selected = identity.pdf_fields || {};
+  return [
+    ["email", "이메일", identity.email],
+    ["phone", "전화번호", identity.phone],
+    ["address", "주소", identity.address],
+  ].filter(([key, , value]) => selected[key] === true && String(value || "").trim())
+    .map(([key, label, value]) => ({ key, label, value: String(value).trim() }));
 }
 
 function requireDatabase() {
@@ -111,6 +186,42 @@ function dashboardJobs() {
   return listJobs(requireDatabase(), runtime.sourcesConfig, packageQualityOptions());
 }
 
+function dashboardWork() {
+  const jobs = dashboardJobs();
+  const followUps = listPendingFollowUps(requireDatabase(), outcomeOptions());
+  return { jobs, workflow: buildWorkflowOverview(jobs, { followUps }) };
+}
+
+function jobMutationPayload(jobId) {
+  const detail = getJobDetail(requireDatabase(), jobId, runtime.sourcesConfig, packageQualityOptions());
+  return { job: publicJobSummary(detail), detail, revisions: databaseRevisions(requireDatabase()) };
+}
+
+function companionContext() {
+  return {
+    searchConfig: runtime.searchConfig,
+    sourcesConfig: runtime.sourcesConfig,
+    profileConfig: runtime.profileConfig,
+  };
+}
+
+function outcomeOptions() {
+  return { timeZone: runtime.profileConfig?.location?.timezone || "Asia/Seoul" };
+}
+
+function companionReviewOptions() {
+  return {
+    context: companionContext(),
+    sourcesConfig: runtime.sourcesConfig,
+    timeZone: runtime.profileConfig?.location?.timezone || "Asia/Seoul",
+    packageOptions: packageQualityOptions(),
+  };
+}
+
+function requirePersonalMode() {
+  if (runtime.mode !== "personal") throw Object.assign(new Error("개인 설정을 완료한 뒤 로컬 companion 작업을 사용할 수 있습니다."), { statusCode: 409 });
+}
+
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
@@ -120,15 +231,36 @@ const mimeTypes = new Map([
   [".png", "image/png"],
 ]);
 
-function sendJson(response, status, body) {
+function sendJson(response, status, body, extraHeaders = {}) {
   const payload = JSON.stringify(body);
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(payload),
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
+    ...extraHeaders,
   });
   response.end(payload);
+}
+
+function revisionEtag(scope, revisions, identity) {
+  const databaseIdentity = Object.fromEntries(requireDatabase().prepare("SELECT key, value FROM app_meta WHERE key IN ('instance_id', 'schema_version')").all()
+    .map((item) => [item.key, item.value]));
+  const suffix = crypto.createHash("sha256")
+    .update(`${identity}:${databaseIdentity.instance_id || "unknown"}:${databaseIdentity.schema_version || "unknown"}`)
+    .digest("hex").slice(0, 16);
+  return `\"${scope}-j${revisions.jobs || 0}-w${revisions.workflow || 0}-${suffix}\"`;
+}
+
+function sendRevisioned(response, request, scope, identity, payload) {
+  const revisions = payload.revisions || databaseRevisions(requireDatabase());
+  const etag = revisionEtag(scope, revisions, identity);
+  if (request.headers["if-none-match"] === etag) {
+    response.writeHead(304, { etag, "cache-control": "private, no-cache", "x-content-type-options": "nosniff" });
+    response.end();
+    return;
+  }
+  sendJson(response, 200, payload, { etag, "cache-control": "private, no-cache" });
 }
 
 function sendError(response, status, message) {
@@ -173,7 +305,8 @@ function emptyResume() {
     school: "", major: "", headline: "", summary: "", skills: [], certificates: [],
     experienceHighlights: [], achievementEvidence: "", representativeExperience: "",
     directScope: "", collaborationScope: "", careerDirection: "", editableSections: [],
-    customSections: [], evidenceItems: [], sourceDocuments: [],
+    customSections: [], evidenceItems: [], sourceDocuments: [], assets: [], structuredItems: [],
+    readiness: { ready: false, score: 0, checks: [], missing: [] },
   };
 }
 
@@ -195,8 +328,12 @@ function dashboardPayload() {
       sources: onboarding.sources.items || {},
       scoreReviewBelow: Number(onboarding.search.scoring?.reviewBelow ?? 70),
       onboarding,
+      companionTasks: [],
+      inbox: { items: [], unreadCount: 0 },
+      outcomeEventTypes: outcomeEventTypes(),
     };
   }
+  const work = dashboardWork();
   return {
     product: "Job Search Operations Dashboard",
     requestedMode,
@@ -211,11 +348,63 @@ function dashboardPayload() {
         ? String(runtime.profileConfig?.location?.timezone || "Asia/Seoul")
         : String(loadExampleConfig("profile")?.location?.timezone || "Asia/Seoul"),
     },
-    jobs: dashboardJobs(),
+    jobs: work.jobs,
+    workflow: work.workflow,
     resume: getResume(runtime.db),
     sources: runtime.sourcesConfig.sources || {},
     scoreReviewBelow: Number(runtime.searchConfig?.scoring?.review_below ?? 70),
     scoringProfile: scoringProfileFromConfig(runtime.searchConfig),
+    companionTasks: runtime.mode === "personal" ? listCompanionTasks(runtime.db) : [],
+    inbox: runtime.mode === "personal" ? listLocalNotifications(runtime.db, { limit: 100 }) : { items: [], unreadCount: 0 },
+    outcomeEventTypes: outcomeEventTypes(),
+  };
+}
+
+function bootstrapPayload() {
+  if (runtime.mode === "onboarding") return dashboardPayload();
+  return {
+    product: "Job Search Operations Dashboard",
+    requestedMode,
+    mode: runtime.mode,
+    onboardingRequired: runtime.onboardingRequired,
+    configStatus: publicSetupStatus(),
+    profile: {
+      displayName: runtime.mode === "personal"
+        ? String(runtime.profileConfig?.identity?.display_name || "")
+        : "예시 사용자",
+      timezone: runtime.mode === "personal"
+        ? String(runtime.profileConfig?.location?.timezone || "Asia/Seoul")
+        : String(loadExampleConfig("profile")?.location?.timezone || "Asia/Seoul"),
+    },
+    jobs: [],
+    workflow: { counts: {}, buckets: {}, total: 0 },
+    resume: getResume(runtime.db),
+    sources: runtime.sourcesConfig.sources || {},
+    scoreReviewBelow: Number(runtime.searchConfig?.scoring?.review_below ?? 70),
+    scoringProfile: scoringProfileFromConfig(runtime.searchConfig),
+    companionTasks: runtime.mode === "personal" ? listCompanionTasks(runtime.db) : [],
+    inbox: runtime.mode === "personal" ? listLocalNotifications(runtime.db, { limit: 100 }) : { items: [], unreadCount: 0 },
+    outcomeEventTypes: outcomeEventTypes(),
+    savedFilters: runtime.mode === "personal" ? listSavedFilters(runtime.db) : [],
+    revisions: databaseRevisions(runtime.db),
+  };
+}
+
+function jobPageOptions(url) {
+  return {
+    page: Number(url.searchParams.get("page") || 1),
+    pageSize: Number(url.searchParams.get("pageSize") || 30),
+    timeZone: runtime.profileConfig?.location?.timezone || "Asia/Seoul",
+    filters: {
+      search: url.searchParams.get("search") || "",
+      track: url.searchParams.get("track") || "",
+      platform: url.searchParams.get("platform") || "",
+      status: url.searchParams.get("status") || "",
+      lifecycle: url.searchParams.get("lifecycle") || "active",
+      deadline: url.searchParams.get("deadline") || "",
+      sort: url.searchParams.get("sort") || "score",
+      favorite: url.searchParams.get("favorite") === "true",
+    },
   };
 }
 
@@ -280,6 +469,57 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, dashboardPayload());
       return;
     }
+    if (request.method === "GET" && url.pathname === "/api/bootstrap") {
+      sendJson(response, 200, bootstrapPayload());
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/jobs") {
+      const page = listJobPage(requireDatabase(), runtime.sourcesConfig, jobPageOptions(url));
+      sendRevisioned(response, request, "jobs", url.search, { ok: true, ...page });
+      return;
+    }
+    if (request.method === "GET" && /^\/api\/jobs\/\d+$/.test(url.pathname)) {
+      const jobId = Number(url.pathname.split("/")[3]);
+      const detail = getJobDetail(requireDatabase(), jobId, runtime.sourcesConfig, packageQualityOptions());
+      const revisions = databaseRevisions(requireDatabase());
+      sendRevisioned(response, request, "job", String(jobId), { ok: true, detail, revisions });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/workflow") {
+      const revisions = databaseRevisions(requireDatabase());
+      sendRevisioned(response, request, "workflow", "all", {
+        ok: true,
+        workflow: buildWorkflowOverview(dashboardJobs(), {
+          followUps: listPendingFollowUps(requireDatabase(), outcomeOptions()),
+        }),
+        revisions,
+      });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/saved-filters") {
+      requirePersonalMode();
+      sendJson(response, 200, { ok: true, savedFilters: listSavedFilters(requireDatabase()) });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/saved-filters") {
+      requirePersonalMode();
+      const savedFilter = saveFilter(requireDatabase(), await readJsonBody(request));
+      sendJson(response, 201, { ok: true, savedFilter, savedFilters: listSavedFilters(requireDatabase()) });
+      return;
+    }
+    if (request.method === "PUT" && /^\/api\/saved-filters\/[0-9a-f-]{36}$/i.test(url.pathname)) {
+      requirePersonalMode();
+      const id = url.pathname.split("/")[3];
+      const savedFilter = saveFilter(requireDatabase(), await readJsonBody(request), { id });
+      sendJson(response, 200, { ok: true, savedFilter, savedFilters: listSavedFilters(requireDatabase()) });
+      return;
+    }
+    if (request.method === "DELETE" && /^\/api\/saved-filters\/[0-9a-f-]{36}$/i.test(url.pathname)) {
+      requirePersonalMode();
+      await readJsonBody(request);
+      sendJson(response, 200, { ok: true, savedFilters: deleteSavedFilter(requireDatabase(), url.pathname.split("/")[3]) });
+      return;
+    }
     if (request.method === "GET" && url.pathname === "/api/onboarding") {
       requireOnboardingMode();
       sendJson(response, 200, { ok: true, onboarding: publicOnboardingState(readOnboardingState()) });
@@ -323,10 +563,188 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, { ok: true, scoringProfile: scoringProfileFromConfig(runtime.searchConfig) });
       return;
     }
+    if (request.method === "GET" && url.pathname === "/api/settings") {
+      requirePersonalMode();
+      sendJson(response, 200, { ok: true, settings: getPersonalSettings(requireDatabase()) });
+      return;
+    }
+    if (request.method === "PATCH" && url.pathname === "/api/settings") {
+      requirePersonalMode();
+      const settings = savePersonalSettings(requireDatabase(), await readJsonBody(request, 2_000_000));
+      reloadPersonalConfiguration();
+      const supersededTaskIds = supersedeStaleCompanionResults(requireDatabase(), companionContext());
+      sendJson(response, 200, {
+        ok: true,
+        settings,
+        supersededTaskIds,
+        dashboard: bootstrapPayload(),
+      });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/settings/documents") {
+      requirePersonalMode();
+      const result = await uploadPersonalDocument(requireDatabase(), request, String(url.searchParams.get("kind") || ""), {
+        replaceId: String(url.searchParams.get("replace") || ""),
+      });
+      const supersededTaskIds = supersedeStaleCompanionResults(requireDatabase(), companionContext());
+      sendJson(response, 201, { ok: true, ...result, supersededTaskIds, resume: getResume(requireDatabase()), tasks: listCompanionTasks(requireDatabase()) });
+      return;
+    }
+    if (request.method === "DELETE" && /^\/api\/settings\/documents\/[^/]+$/.test(url.pathname)) {
+      requirePersonalMode();
+      await readJsonBody(request);
+      const result = archivePersonalDocument(requireDatabase(), decodeURIComponent(url.pathname.split("/").pop()));
+      const supersededTaskIds = supersedeStaleCompanionResults(requireDatabase(), companionContext());
+      sendJson(response, 200, { ok: true, ...result, supersededTaskIds, resume: getResume(requireDatabase()), tasks: listCompanionTasks(requireDatabase()) });
+      return;
+    }
+    if (request.method === "GET" && /^\/api\/jobs\/\d+\/outcomes$/.test(url.pathname)) {
+      requirePersonalMode();
+      const jobId = Number(url.pathname.split("/")[3]);
+      sendJson(response, 200, { ok: true, outcomes: listJobOutcomes(requireDatabase(), jobId, outcomeOptions()) });
+      return;
+    }
+    if (request.method === "POST" && /^\/api\/jobs\/\d+\/outcomes$/.test(url.pathname)) {
+      requirePersonalMode();
+      const jobId = Number(url.pathname.split("/")[3]);
+      const result = appendApplicationEvent(requireDatabase(), jobId, await readJsonBody(request));
+      sendJson(response, result.deduplicated ? 200 : 201, {
+        ok: true,
+        ...result,
+        outcomes: listJobOutcomes(requireDatabase(), jobId, outcomeOptions()),
+        inbox: listLocalNotifications(requireDatabase()),
+        workflow: dashboardWork().workflow,
+        ...jobMutationPayload(jobId),
+      });
+      return;
+    }
+    if (request.method === "POST" && /^\/api\/jobs\/\d+\/outcomes\/\d+\/corrections$/.test(url.pathname)) {
+      requirePersonalMode();
+      const parts = url.pathname.split("/");
+      const jobId = Number(parts[3]);
+      const eventId = Number(parts[5]);
+      const result = appendApplicationEventCorrection(requireDatabase(), jobId, eventId, await readJsonBody(request));
+      sendJson(response, result.deduplicated ? 200 : 201, {
+        ok: true,
+        ...result,
+        outcomes: listJobOutcomes(requireDatabase(), jobId, outcomeOptions()),
+        inbox: listLocalNotifications(requireDatabase()),
+        workflow: dashboardWork().workflow,
+        ...jobMutationPayload(jobId),
+      });
+      return;
+    }
+    if (request.method === "POST" && /^\/api\/jobs\/\d+\/follow-ups$/.test(url.pathname)) {
+      requirePersonalMode();
+      const jobId = Number(url.pathname.split("/")[3]);
+      const result = createFollowUp(requireDatabase(), jobId, await readJsonBody(request), outcomeOptions());
+      sendJson(response, result.deduplicated ? 200 : 201, {
+        ok: true,
+        ...result,
+        outcomes: listJobOutcomes(requireDatabase(), jobId, outcomeOptions()),
+        inbox: listLocalNotifications(requireDatabase()),
+        workflow: dashboardWork().workflow,
+      });
+      return;
+    }
+    if (request.method === "POST" && /^\/api\/follow-ups\/[^/]+\/(complete|cancel)$/.test(url.pathname)) {
+      requirePersonalMode();
+      const parts = url.pathname.split("/");
+      const result = transitionFollowUp(requireDatabase(), decodeURIComponent(parts[3]), parts[4], outcomeOptions());
+      sendJson(response, 200, {
+        ok: true,
+        ...result,
+        outcomes: listJobOutcomes(requireDatabase(), result.followUp.jobId, outcomeOptions()),
+        inbox: listLocalNotifications(requireDatabase()),
+        workflow: dashboardWork().workflow,
+      });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/inbox") {
+      requirePersonalMode();
+      sendJson(response, 200, {
+        ok: true,
+        inbox: listLocalNotifications(requireDatabase(), {
+          unreadOnly: url.searchParams.get("unread") === "true",
+          limit: Number(url.searchParams.get("limit") || 100),
+        }),
+      });
+      return;
+    }
+    if (request.method === "POST" && /^\/api\/inbox\/\d+\/read$/.test(url.pathname)) {
+      requirePersonalMode();
+      await readJsonBody(request);
+      sendJson(response, 200, { ok: true, inbox: markNotificationRead(requireDatabase(), Number(url.pathname.split("/")[3])) });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/companion/tasks") {
+      requirePersonalMode();
+      sendJson(response, 200, { ok: true, tasks: listCompanionTasks(requireDatabase()) });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/companion/tasks") {
+      requirePersonalMode();
+      const result = createCompanionTask(requireDatabase(), await readJsonBody(request, 2_000_000), companionContext());
+      sendJson(response, result.deduplicated ? 200 : 201, { ok: true, ...result, tasks: listCompanionTasks(requireDatabase()) });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/companion/tasks/claim") {
+      requirePersonalMode();
+      const claimed = claimNextCompanionTask(requireDatabase(), await readJsonBody(request));
+      sendJson(response, 200, { ok: true, claimed });
+      return;
+    }
+    if (request.method === "GET" && /^\/api\/companion\/tasks\/[^/]+\/review$/.test(url.pathname)) {
+      requirePersonalMode();
+      const taskId = decodeURIComponent(url.pathname.split("/")[4]);
+      sendJson(response, 200, { ok: true, ...getCompanionResultReview(requireDatabase(), taskId) });
+      return;
+    }
+    if (request.method === "PATCH" && /^\/api\/companion\/tasks\/[^/]+\/review$/.test(url.pathname)) {
+      requirePersonalMode();
+      const taskId = decodeURIComponent(url.pathname.split("/")[4]);
+      const result = patchCompanionResultReview(requireDatabase(), taskId, await readJsonBody(request, 2_000_000));
+      sendJson(response, 200, { ok: true, ...result, tasks: listCompanionTasks(requireDatabase()) });
+      return;
+    }
+    if (request.method === "POST" && /^\/api\/companion\/tasks\/[^/]+\/(prepare-review|apply-review|reject-review)$/.test(url.pathname)) {
+      requirePersonalMode();
+      const parts = url.pathname.split("/");
+      const taskId = decodeURIComponent(parts[4]);
+      const action = parts[5];
+      const body = await readJsonBody(request, 2_000_000);
+      const result = action === "prepare-review"
+        ? prepareCompanionResultReview(requireDatabase(), taskId, companionReviewOptions())
+        : action === "apply-review"
+          ? applyCompanionResultReview(requireDatabase(), taskId, companionReviewOptions())
+          : rejectCompanionResultReview(requireDatabase(), taskId, body);
+      sendJson(response, 200, {
+        ok: true,
+        ...result,
+        tasks: listCompanionTasks(requireDatabase()),
+        revisions: databaseRevisions(requireDatabase()),
+      });
+      return;
+    }
+    if (request.method === "POST" && /^\/api\/companion\/tasks\/[^/]+\/(heartbeat|complete|fail|retry|cancel)$/.test(url.pathname)) {
+      requirePersonalMode();
+      const parts = url.pathname.split("/");
+      const taskId = decodeURIComponent(parts[4]);
+      const action = parts[5];
+      const body = await readJsonBody(request, 2_000_000);
+      let task;
+      if (action === "heartbeat") task = heartbeatCompanionTask(requireDatabase(), taskId, body);
+      else if (action === "complete") task = completeCompanionTask(requireDatabase(), taskId, body);
+      else if (action === "fail") task = failCompanionTask(requireDatabase(), taskId, body);
+      else if (action === "retry") task = retryCompanionTask(requireDatabase(), taskId);
+      else task = cancelCompanionTask(requireDatabase(), taskId);
+      sendJson(response, 200, { ok: true, task, tasks: listCompanionTasks(requireDatabase()) });
+      return;
+    }
     if (request.method === "PATCH" && /^\/api\/jobs\/\d+\/state$/.test(url.pathname)) {
       const jobId = Number(url.pathname.split("/")[3]);
       updateApplicationState(requireDatabase(), jobId, await readJsonBody(request));
-      sendJson(response, 200, { ok: true, jobs: dashboardJobs() });
+      sendJson(response, 200, { ok: true, ...jobMutationPayload(jobId) });
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/jobs") {
@@ -336,13 +754,53 @@ const server = http.createServer(async (request, response) => {
       }
       const jobId = importJob(requireDatabase(), await readJsonBody(request), {
         scoringProfile: scoringProfileFromConfig(runtime.searchConfig),
+        timeZone: runtime.profileConfig?.location?.timezone || "Asia/Seoul",
       });
-      sendJson(response, 201, { ok: true, jobId, jobs: dashboardJobs() });
+      sendJson(response, 201, { ok: true, jobId, ...jobMutationPayload(jobId) });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/collection/contract") {
+      sendJson(response, 200, { contract: collectionAdapterContract() });
+      return;
+    }
+    if (request.method === "GET" && /^\/api\/collection\/runs\/[0-9a-f-]{36}$/i.test(url.pathname)) {
+      requirePersonalMode();
+      sendJson(response, 200, { run: getCollectionRun(url.pathname.split("/")[4], { db: requireDatabase() }) });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/jobs/batch") {
+      requirePersonalMode();
+      const body = await readJsonBody(request, 8_000_000);
+      if (body.publishConfirmed === true) {
+        const result = publishCollectionRun(requireDatabase(), String(body.runId || ""), {
+          expectedChecksum: body.expectedChecksum,
+          sourcesConfig: runtime.sourcesConfig,
+          timeZone: runtime.profileConfig?.location?.timezone || "Asia/Seoul",
+        });
+        sendJson(response, 200, { ok: true, ...result, invalidate: ["jobs", "workflow"], revisions: databaseRevisions(requireDatabase()) });
+      } else {
+        const result = stageCollectionBatch(requireDatabase(), body, {
+          sourcesConfig: runtime.sourcesConfig,
+          timeZone: runtime.profileConfig?.location?.timezone || "Asia/Seoul",
+        });
+        sendJson(response, result.coalesced ? 200 : 201, { ok: true, dryRun: true, ...result });
+      }
       return;
     }
     if (request.method === "PUT" && url.pathname === "/api/resume") {
       const resume = saveResume(requireDatabase(), await readJsonBody(request, 2_000_000));
-      sendJson(response, 200, { ok: true, resume });
+      sendJson(response, 200, { ok: true, resume, invalidate: ["jobs", "workflow"], revisions: databaseRevisions(requireDatabase()) });
+      return;
+    }
+    if (request.method === "PUT" && url.pathname === "/api/resume/structured") {
+      const structuredItems = saveStructuredResumeItems(requireDatabase(), (await readJsonBody(request, 2_000_000)).structuredItems);
+      sendJson(response, 200, { ok: true, structuredItems, resume: getResume(requireDatabase()), invalidate: ["jobs", "workflow"], revisions: databaseRevisions(requireDatabase()) });
+      return;
+    }
+    if (request.method === "PATCH" && /^\/api\/resume\/assets\/[^/]+$/.test(url.pathname)) {
+      const documentId = decodeURIComponent(url.pathname.split("/")[4]);
+      const assets = updateResumeAsset(requireDatabase(), documentId, await readJsonBody(request));
+      sendJson(response, 200, { ok: true, assets, resume: getResume(requireDatabase()), invalidate: ["jobs", "workflow"], revisions: databaseRevisions(requireDatabase()) });
       return;
     }
     if (request.method === "POST" && /^\/api\/jobs\/\d+\/package$/.test(url.pathname)) {
@@ -355,19 +813,19 @@ const server = http.createServer(async (request, response) => {
         ...packageQualityOptions(),
         refreshConfirmed: body.refreshConfirmed === true,
       });
-      sendJson(response, 201, { ok: true, package: publicPackage(packageValue), jobs: dashboardJobs() });
+      sendJson(response, 201, { ok: true, package: publicPackage(packageValue), ...jobMutationPayload(jobId) });
       return;
     }
     if (request.method === "PUT" && /^\/api\/packages\/\d+$/.test(url.pathname)) {
       const packageId = Number(url.pathname.split("/")[3]);
       const packageValue = updatePackage(requireDatabase(), packageId, await readJsonBody(request), packageQualityOptions());
-      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: dashboardJobs() });
+      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), ...jobMutationPayload(packageValue.jobId) });
       return;
     }
     if (request.method === "POST" && /^\/api\/packages\/\d+\/approve$/.test(url.pathname)) {
       const packageId = Number(url.pathname.split("/")[3]);
       const packageValue = await approvePackage(requireDatabase(), packageId, { ...await readJsonBody(request), ...packageQualityOptions() });
-      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: dashboardJobs() });
+      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), ...jobMutationPayload(packageValue.jobId) });
       return;
     }
     if (request.method === "POST" && /^\/api\/packages\/\d+\/prepare$/.test(url.pathname)) {
@@ -376,14 +834,14 @@ const server = http.createServer(async (request, response) => {
         ...await readJsonBody(request),
         ...packageQualityOptions(),
       });
-      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: dashboardJobs() });
+      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), ...jobMutationPayload(packageValue.jobId) });
       return;
     }
     if (request.method === "POST" && /^\/api\/packages\/\d+\/submitted$/.test(url.pathname)) {
       const packageId = Number(url.pathname.split("/")[3]);
       await readJsonBody(request);
       const packageValue = recordSubmitted(requireDatabase(), packageId);
-      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), jobs: dashboardJobs() });
+      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), ...jobMutationPayload(packageValue.jobId) });
       return;
     }
     if (url.pathname.startsWith("/api/")) {

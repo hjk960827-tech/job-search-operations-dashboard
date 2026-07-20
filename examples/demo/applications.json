@@ -8,7 +8,7 @@
   {
     "jobKey": "demo-bluebridge-backend",
     "favorite": false,
-    "workflowStatus": "new",
-    "note": ""
+    "workflowStatus": "applied",
+    "note": "합성 지원 완료 상태입니다."
   }
 ]

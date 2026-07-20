@@ -13,12 +13,42 @@
 6. 플랫폼 키의 고정 정렬
 
 `application_state`에는 관심 여부, 지원 상태와 메모만 저장합니다.
+`jobs.deadline`은 대표 공고의 마감일이고 `job_sources.deadline`은 각 플랫폼 출처가
+표시한 마감일입니다. 출처의 저장 상태가 `closed`이거나 출처 마감일이 지났을 때만 그
+출처를 종료로 해석합니다. 저장된 출처가 모두 종료된 경우에만 대표 공고가 `closed`가
+되며, 이후 어느 한 출처가 다시 `active`로 확인되면 대표 공고도 다시 열립니다.
+마감 여부와 D-day는 `profile.yml`의 사용자 시간대 기준 날짜로 계산하며 잘못된 시간대는
+Korea-first 기본값인 `Asia/Seoul`로 안전하게 대체합니다.
+각 출처에는 허용된 접근 방식, 제한된 provenance, 최초·최근 확인 시각을 함께 보관하고
+계정 상태·자격증명·회사 평점·회사 리뷰는 수집 계약에서 거부합니다.
+
+대량 수집 결과는 운영 DB에 바로 쓰지 않습니다. `data/private/collection-runs/` 아래의
+owner-only 실행 폴더에서 일관된 SQLite snapshot에 전체 batch를 먼저 적용하고
+create/update/unchanged diff, 무결성, 외래키, 파일 체크섬을 검증합니다. publish 시에는
+동일 DB instance·공고 revision·요청 체크섬을 다시 확인한 뒤 최대 1,000개 공고를 하나의
+`BEGIN IMMEDIATE` 트랜잭션으로 적용합니다. staging 뒤 다른 writer가 공고를 바꾸면 기존
+실행은 폐기하고 새 dry-run을 만들어야 합니다. 공고 반영과 publication journal은 같은
+트랜잭션에 기록되며 JSON manifest 갱신 실패는 동일 체크섬 재시도로만 복구합니다.
+
 `resume_profile`에는 직무·경력·학력 같은 사실 정보, 이력서 섹션 내용과 사용자가
 공고별로 수정하도록 허용한 섹션 목록을 저장합니다. 등록 PDF·DOCX는 Git에서 제외된
 `data/private/documents/`에 보관하고, DB의 `source_documents`에는 내부 경로·종류·크기·
 SHA-256만 기록합니다. `profile_facts`, `evidence_items`, `resume_custom_sections`는 사용자가
 승인한 문서 분석 결과를 분리해 저장합니다. `job_tailoring`은 공고별 중점 섹션과 실제
 지원서 질문을 보관합니다.
+
+`resume_assets`는 등록 문서를 `active`, `review_required`, `archived`로 관리합니다.
+`resume_structured_items`는 경력·학력·기술·자격·프로젝트를 공통 필드와 날짜·주요 내용·
+출처 참조로 보관합니다. 의미가 같은 구조화 항목은 정규화한 직무·제목·기관·역할·기간
+조합으로 저장 전에 거부합니다. 호환 필드에 이미 있는 학력·자격이 구조화 항목으로도
+등록되면 최종 문서에서는 구조화 항목을 사용해 같은 정보의 이중 출력을 막습니다.
+
+홈 작업함의 workflow는 별도 테이블이나 중복 상태가 아닙니다. 공고 lifecycle,
+`application_state.workflow_status`, 최신 `application_packages.state`, 기준 변경 여부를
+순서대로 평가해 다음 단계와 허용 행동을 파생합니다. 공고 검토 전에는 작업본 생성 버튼을
+노출하지 않고, 품질 보완 중에는 승인 버튼을 노출하지 않으며, 승인된 PDF만 수기 제출
+준비로 이동할 수 있습니다. 작업함 deep link는 공고 ID와 현재 파생 단계를 사용하며 개인
+파일 경로나 패키지 경로를 URL에 포함하지 않습니다.
 
 현재 섹션 카탈로그는 `headline`, `summary`, `skills`, `experience_highlights`,
 `achievement_evidence`, `representative_experience`, `direct_scope`,
@@ -41,6 +71,10 @@ SHA-256만 기록합니다. `profile_facts`, `evidence_items`, `resume_custom_se
 질문이 있을 때만 `application_question` 섹션으로 추가되고 이력서 PDF 본문에는
 포함하지 않습니다. 이력서 Markdown·HTML·PDF에는 `resume` 섹션만 사용하고,
 질문 답변은 같은 패키지 폴더의 `application-answers.md`에 별도로 저장합니다.
+최종 문서의 `contacts`는 `profile.yml`에서 사용자가 개별 선택한 이메일·전화번호·주소만
+포함합니다. 패키지 내용에는 선택 당시 snapshot이 들어가며 연락처 선택 또는 구조화 이력서가
+바뀌면 기본 이력서 지문이 달라져 기존 패키지는 stale 처리됩니다. 패키지 API는 각 섹션의
+`originalValue`와 현재 값을 비교한 diff와 통과·보완 품질 판정 사유를 함께 제공합니다.
 
 승인 전 품질 검사는 점수와 별도의 차단조건을 먼저 적용합니다.
 
@@ -87,6 +121,49 @@ SHA-256만 기록합니다. `profile_facts`, `evidence_items`, `resume_custom_se
 렌더합니다. 렌더가 끝난 뒤 트랜잭션에서 상태·체크섬·지문·최신 버전을 다시 검사하고
 조건부 갱신에 성공한 경우만 승인 이력을 기록합니다.
 
-DB에는 `database_role`(`demo` 또는 `personal`)과 `schema_version=3`이 기록됩니다.
-역할 불일치는 어떤 마이그레이션보다 먼저 차단합니다. 이전 개발 DB의 도달 불가
-패키지 상태는 안전한 현재 상태로 정규화하고 DB trigger가 다시 생기는 것을 막습니다.
+DB에는 `database_role`(`demo` 또는 `personal`)과 `schema_version=11`이 기록됩니다.
+`schema_migrations`는 설치에 적용된 버전·이름·체크섬과 기존 스키마 버전에서 승계했는지
+여부를 순서대로 보관합니다. 역할 불일치와 지원 버전보다 새로운 DB는 어떤 쓰기나
+마이그레이션보다 먼저 차단합니다. 기존 DB를 업그레이드할 때는 원본 바이트 백업을 먼저
+만들고, 모든 변경을 한 트랜잭션으로 적용하며 무결성·외래키·역할·버전을 다시 검사합니다.
+검사나 마이그레이션이 실패하면 변경 전 파일로 복구합니다.
+
+`system_revisions`는 공고 데이터와 지원 워크플로우 변경 번호를 분리해 관리합니다.
+공고·출처·점수·맞춤 기준 변경은 `jobs`, 이력서·지원 상태·패키지·문서 변경은
+`workflow` revision을 올립니다. 클라이언트는 이후 증분 동기화에서 두 범위를 독립적으로
+판단할 수 있습니다.
+
+`saved_filters`는 검색·트랙·플랫폼·지원 상태·공고 상태·마감·정렬·관심 여부만 JSON으로
+저장합니다. 최대 30개이며 한 개만 시작 기본값이 될 수 있습니다. 목록 API는 이 조건을
+전체 결과에 먼저 적용한 뒤 최대 100건을 반환하고, 목록에는 출처 URL·provenance·점수
+breakdown·맞춤 문서 내용을 포함하지 않습니다. 전체 내용은 선택 공고 상세 API에서만
+반환합니다. 목록·상세 ETag는 `system_revisions`와 요청 조건에 결합됩니다.
+
+`agent_tasks`는 provider-neutral 로컬 companion 요청의 상태만 보관합니다. 공고 수집,
+문서 분석, 공고별 문서 생성 작업은 `queued → running → succeeded|failed|cancelled`로
+진행하며 요청/결과 본문은 Git 제외 owner-only JSON 파일에 저장합니다. 활성 요청은
+kind와 입력 체크섬으로 중복을 차단하고, 실행 중인 문서 생성에는 전역 partial unique
+index를 적용해 한 번에 하나만 처리합니다. lease와 heartbeat가 만료된 작업은 재시도
+한도 안에서 queue로 돌아가며, 한도를 소진하면 실패로 남습니다.
+
+`application_events`는 제출 뒤 서류 결과·면접·합격·불합격·철회를 append-only로
+누적합니다. 같은 사건은 semantic checksum과 사용자 재시도용 event key로 중복을 막고,
+DB trigger가 행 수정·삭제를 거부합니다. 결과 증빙은 종류·설명·선택적 SHA-256만
+저장하고 외부 파일 경로나 메시지 원문을 저장하지 않습니다. 정정은 원본을 변경하는 대신
+새 사건의 `correction_of_event_id`와 필수 정정 사유로 연결합니다.
+`follow_ups`는 직접 지정한 예정일 또는 결과 사건 기준 D+0~365일을 보관하며
+`pending`에서 `completed` 또는 `cancelled`로만 이동합니다. `local_notifications`는 결과와
+후속조치마다 내부 공고 deep link를 한 건 생성하고 읽음 시각만 갱신합니다. 외부 메시지
+전송과 Telegram·이메일·푸시 자격증명은 이 모델에 없습니다.
+
+`jobs.reopened_at`과 `jobs.reopen_count`는 종료 공고가 다시 활성화된 이력을 보존합니다.
+처음 본 공고와 재오픈 공고 표시는 이 필드와 최초 수집 시각에서 파생하며 별도의 지원
+상태를 만들지 않습니다.
+
+`privacy_deletion_events`는 보존 기간이 지난 비활성 등록 문서의 명시적 삭제 결과만
+기록합니다. 활성 문서는 자동 삭제하지 않습니다. 파일은 먼저 owner-only 격리 폴더로
+이동하고 DB 삭제가 실패하면 원래 위치로 복구합니다. DB 반영 뒤 파일 제거가 실패하면
+격리 상태를 기록해 원문이 임의 위치로 되돌아가거나 조용히 유실된 것처럼 보이지 않게 합니다.
+
+이전 개발 DB의 도달 불가 패키지 상태는 안전한 현재 상태로 정규화하고 DB trigger가
+다시 생기는 것을 막습니다.

@@ -13,7 +13,8 @@ running dashboard to personal mode.
 3. Ask the user's existing Codex or Claude Code session to analyze the documents.
 4. Mark every result as use, edit or exclude. New analysis always starts as
    `pending`; leaving even one item undecided blocks completion.
-5. Set primary/secondary roles and career stage.
+5. Set primary/secondary roles and career stage. Optionally enter contact fields and
+   explicitly choose which of them may appear in final PDFs.
 6. Set region, work mode, employment and experience conditions.
 7. Confirm suggested include/exclude keywords and user-defined tracks.
 8. Choose collection, display, lifecycle checking and source priority.
@@ -25,6 +26,12 @@ The dashboard never requests an AI key. The user runs analysis in an already
 authenticated local agent session. Suggestions do not become settings until the
 user explicitly loads and saves them. Age and date of birth must not be extracted,
 stored or scored.
+
+After activation, the resume screen can mark registered resume/portfolio assets as
+active, review-required or archived and manage structured experience, education,
+skill, certification and project entries. These entries are never inferred by the
+server. Contact values remain only in ignored local `profile.yml`; a value is printed
+only when its matching `identity.pdf_fields` flag is true.
 
 ## Analysis result
 
@@ -63,6 +70,8 @@ also applied to direct resume-save API input before any resume row is changed.
 | `PUT` | `/api/onboarding/analysis` | Validate and save structured agent output |
 | `POST` | `/api/onboarding/complete` | Atomically install settings and create the personal DB |
 | `GET` | `/api/scoring-profile` | Read active dimensions and their profile checksum |
+| `PUT` | `/api/resume/structured` | Replace validated user-entered structured resume items |
+| `PATCH` | `/api/resume/assets/:id` | Change a registered document asset state |
 
 If completion fails, temporary settings and a partially created database are
 removed and onboarding remains active. Existing configuration or a personal DB is
