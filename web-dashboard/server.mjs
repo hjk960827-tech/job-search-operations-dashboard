@@ -97,6 +97,7 @@ const realPublicRoot = fs.realpathSync(publicRoot);
 const requestedMode = runtimeMode();
 const host = runtimeHost();
 const port = runtimePort();
+const runtimeEnvironment = Object.freeze({ codespaces: String(process.env.CODESPACES || "").toLowerCase() === "true" });
 
 function createRuntime(mode) {
   const setup = configStatus();
@@ -315,6 +316,7 @@ function dashboardPayload() {
     const onboarding = publicOnboardingState(readOnboardingState());
     return {
       product: "Job Search Operations Dashboard",
+      environment: runtimeEnvironment,
       requestedMode,
       mode: "onboarding",
       onboardingRequired: true,
@@ -336,6 +338,7 @@ function dashboardPayload() {
   const work = dashboardWork();
   return {
     product: "Job Search Operations Dashboard",
+    environment: runtimeEnvironment,
     requestedMode,
     mode: runtime.mode,
     onboardingRequired: runtime.onboardingRequired,
@@ -364,6 +367,7 @@ function bootstrapPayload() {
   if (runtime.mode === "onboarding") return dashboardPayload();
   return {
     product: "Job Search Operations Dashboard",
+    environment: runtimeEnvironment,
     requestedMode,
     mode: runtime.mode,
     onboardingRequired: runtime.onboardingRequired,

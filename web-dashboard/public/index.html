@@ -25,6 +25,11 @@
         <span>화면에 표시된 인물·회사·공고는 실제 정보가 아니며 예시 모드는 읽기 전용입니다. 개인 설정을 마치면 별도 DB로 전환됩니다.</span>
       </div>
 
+      <div id="codespacesBanner" class="example-banner" hidden>
+        <strong>GitHub 임시 환경에서 실행 중</strong>
+        <span>이 공간은 GitHub 서버에 저장됩니다. 기능 확인에는 합성 문서를 사용하고, 실제 이력서·연락처·AI 계정은 개인 컴퓨터에서 등록해 주세요.</span>
+      </div>
+
       <nav class="tabs" aria-label="주요 화면">
         <button class="tab active" type="button" data-screen="home">홈·작업함</button>
         <button class="tab" type="button" data-screen="jobs">공고 관리</button>
@@ -50,8 +55,8 @@
             <form id="onboardingForm" class="card onboarding-card">
               <section class="onboarding-panel" data-onboarding-step="1">
                 <p class="section-kicker">1. 저장 안내</p>
-                <h3>개인 자료는 이 컴퓨터에만 저장됩니다</h3>
-                <p>등록한 문서, 분석 결과, 설정과 개인 DB는 Git에 포함되지 않는 로컬 비공개 영역에 저장됩니다.</p>
+                <h3 id="onboardingStorageTitle">개인 자료는 이 컴퓨터에만 저장됩니다</h3>
+                <p id="onboardingStorageDescription">등록한 문서, 분석 결과, 설정과 개인 DB는 Git에 포함되지 않는 로컬 비공개 영역에 저장됩니다.</p>
                 <label class="consent-row"><input id="onboardingPrivacy" type="checkbox"><span>저장 위치와 공개 제외 원칙을 확인했습니다.</span></label>
               </section>
 

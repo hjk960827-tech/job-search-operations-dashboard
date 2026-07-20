@@ -6,7 +6,11 @@
 
 공고 출처 비교, 중복 정리, 관심·지원 상태, 이력서 작성 기준을 하나의 로컬
 대시보드에서 관리하는 프로젝트입니다. 첫 실행은 실제 개인정보가 없는 합성
-예시 데이터로 시작합니다. 현재 버전은 `0.3.0`입니다.
+예시 데이터로 시작합니다. 현재 버전은 `0.3.1`입니다.
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&repo=1298501275&skip_quickstart=true)
+
+위 버튼을 사용하면 로컬 설치 없이 GitHub의 개인 임시 환경에서 실제 대시보드를 열 수 있습니다. 처음에는 11단계 초기 설정 화면이 열리며, 자세한 사용법과 개인정보 주의사항은 [Codespaces 체험 가이드](docs/CODESPACES.md)를 확인하세요.
 
 ## 핵심 원칙
 
