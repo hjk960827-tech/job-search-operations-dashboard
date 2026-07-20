@@ -236,6 +236,7 @@ test("personal dashboard guides a new job through review, quality, approval, man
     const correctionRecorded = page.waitForResponse((response) => /\/api\/jobs\/\d+\/outcomes\/\d+\/corrections$/.test(response.url()) && response.request().method() === "POST");
     await page.locator("[data-outcome-event-id] .correction-form").getByRole("button", { name: "정정 기록 추가" }).click();
     assert.equal((await correctionRecorded).status(), 201);
+    await page.locator("[data-outcome-event-id]").nth(1).waitFor();
     assert.equal(await page.locator("[data-outcome-event-id]").count(), 2);
     assert.match(await page.locator("[data-outcome-event-id]").last().innerText(), /이후 정정 기록 있음/);
 
