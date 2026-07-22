@@ -45,12 +45,6 @@ sources:
     display: true
     lifecycle_check: true
     priority: 60
-  jobplanet:
-    label: 잡플래닛
-    collect: false
-    display: true
-    lifecycle_check: true
-    priority: 70
   rocketpunch:
     label: 로켓펀치
     collect: false

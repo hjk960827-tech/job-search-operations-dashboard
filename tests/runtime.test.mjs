@@ -155,6 +155,13 @@ test("request guard rejects foreign origins and non-JSON personal mutations", ()
     port: 8766,
     mode: "personal",
   }));
+  assert.doesNotThrow(() => protectLocalRequest({
+    method: "POST",
+    pathname: "/api/outcomes/7/evidence",
+    headers: { host: "127.0.0.1:8766", "content-type": "multipart/form-data; boundary=example" },
+    port: 8766,
+    mode: "personal",
+  }));
   assert.throws(
     () => protectLocalRequest({
       method: "POST", pathname: "/api/settings/documents",

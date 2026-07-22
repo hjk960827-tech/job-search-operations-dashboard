@@ -96,7 +96,7 @@ test("local JSON export contains the database role and all tables without changi
     assert.equal(payload.format, "job-search-operations-dashboard-export-v1");
     assert.equal(payload.exportedAt, "2026-01-02T03:04:05.000Z");
     assert.equal(payload.database.role, "personal");
-    assert.equal(payload.database.schemaVersion, 11);
+    assert.equal(payload.database.schemaVersion, 13);
     assert.equal(payload.tables.jobs[0].job_key, "exported-job");
     assert.equal(result.tableCount, Object.keys(payload.tables).length);
   } finally {

@@ -12,11 +12,13 @@ import {
 import {
   approvePackage,
   buildPackageContent,
+  cancelSubmissionPreparation,
   createPackage,
   evaluatePackageQuality,
   getLatestPackageForJob,
   prepareSubmission,
   recordSubmitted,
+  transitionPackageReview,
   updatePackage,
 } from "../lib/package-workflow.mjs";
 
@@ -954,4 +956,47 @@ test("unreachable package states are no longer accepted by the schema", () => {
   } finally {
     value.cleanup(packageValue);
   }
+});
+
+test("package review supports hold, resume, revision request, and approval cancellation without new core states", async () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    packageValue = updatePackage(value.db, packageValue.id, { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum });
+    assert.equal(transitionPackageReview(value.db, packageValue.id, { status: "on_hold", note: "User paused review" }).reviewStatus, "on_hold");
+    assert.equal(transitionPackageReview(value.db, packageValue.id, { status: "active" }).reviewStatus, "active");
+    packageValue = await approvePackage(value.db, packageValue.id, { expectedChecksum: packageValue.checksum, renderer: fakePdf(1) });
+    const pdfPath = packageValue.artifacts.pdfPath;
+    const revised = transitionPackageReview(value.db, packageValue.id, { status: "revision_requested", note: "Clarify one section" });
+    assert.equal(revised.state, "approval_pending");
+    assert.equal(revised.reviewStatus, "revision_requested");
+    assert.equal(revised.approvedChecksum, "");
+    assert.equal(fs.existsSync(pdfPath), false);
+    await assert.rejects(() => approvePackage(value.db, packageValue.id, { expectedChecksum: revised.checksum, renderer: fakePdf(1) }), /review hold|revision request/);
+    transitionPackageReview(value.db, packageValue.id, { status: "active" });
+    packageValue = await approvePackage(value.db, packageValue.id, { expectedChecksum: revised.checksum, renderer: fakePdf(1) });
+    const cancelled = transitionPackageReview(value.db, packageValue.id, { status: "cancel_approval" });
+    assert.equal(cancelled.state, "approval_pending");
+    assert.equal(cancelled.reviewStatus, "active");
+  } finally { value.cleanup(packageValue); }
+});
+
+test("submission preparation can be cancelled before external submission and removes only the frozen copy", async () => {
+  const value = fixture();
+  let packageValue;
+  try {
+    packageValue = createPackage(value.db, value.jobId);
+    packageValue = updatePackage(value.db, packageValue.id, { sections: completeSections(packageValue), expectedChecksum: packageValue.checksum });
+    packageValue = await approvePackage(value.db, packageValue.id, { expectedChecksum: packageValue.checksum, renderer: fakePdf(1) });
+    const approvedPdf = packageValue.artifacts.pdfPath;
+    packageValue = prepareSubmission(value.db, packageValue.id);
+    const frozen = value.db.prepare("SELECT frozen_pdf_path FROM package_submissions WHERE package_id = ?").get(packageValue.id).frozen_pdf_path;
+    assert.equal(fs.existsSync(frozen), true);
+    packageValue = cancelSubmissionPreparation(value.db, packageValue.id);
+    assert.equal(packageValue.state, "approved");
+    assert.equal(fs.existsSync(approvedPdf), true);
+    assert.equal(fs.existsSync(frozen), false);
+    assert.equal(value.db.prepare("SELECT COUNT(*) AS count FROM package_submissions WHERE package_id = ?").get(packageValue.id).count, 0);
+  } finally { value.cleanup(packageValue); }
 });

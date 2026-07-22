@@ -37,8 +37,10 @@ test("UI contract exposes runtime capabilities without enabling unsupported auto
   assert.deepEqual(personal.capabilities.documents, { available: true, writable: true });
   assert.deepEqual(personal.capabilities.packageGenerationRequest, { available: true, writable: true });
   assert.deepEqual(personal.capabilities.packagePdfPreview, { available: false, writable: false });
-  assert.deepEqual(personal.capabilities.packageReviewTransitions, { available: false, writable: false });
-  assert.deepEqual(personal.capabilities.markAllNotificationsRead, { available: false, writable: false });
+  assert.deepEqual(personal.capabilities.packageReviewTransitions, { available: true, writable: true });
+  assert.deepEqual(personal.capabilities.cancelSubmissionPreparation, { available: true, writable: true });
+  assert.deepEqual(personal.capabilities.markAllNotificationsRead, { available: true, writable: true });
+  assert.deepEqual(personal.capabilities.outcomeEvidenceUpload, { available: true, writable: true });
   assert.deepEqual(personal.capabilities.automaticSubmission, { available: false, writable: false });
   assert.equal(personal.constraints.builtInCrawler, false);
   assert.equal(personal.constraints.builtInAiClient, false);

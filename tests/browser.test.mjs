@@ -51,9 +51,9 @@ function waitForServer(child) {
   });
 }
 
-test("demo dashboard loads as read-only and archived status filters remain usable", async () => {
-  const port = 20000 + (process.pid % 1000);
-  const dbName = `browser-test-${process.pid}.sqlite`;
+test("default Free Agent frontend keeps two primary categories and works on desktop and mobile", async () => {
+  const port = 21000 + (process.pid % 1000);
+  const dbName = `parity-browser-${process.pid}.sqlite`;
   const dbPath = path.join(root, "data", dbName);
   const child = spawn(process.execPath, ["web-dashboard/server.mjs"], {
     cwd: root,
@@ -64,39 +64,93 @@ test("demo dashboard loads as read-only and archived status filters remain usabl
   try {
     await waitForServer(child);
     browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
-    await page.goto(`http://127.0.0.1:${port}`, { waitUntil: "networkidle" });
-    assert.equal(await page.locator("#workflowScreen").isVisible(), true);
-    assert.equal(await page.locator("#workflowQueues .workflow-task").count(), 3);
-    await page.locator('[data-screen="jobs"]').click();
-    assert.equal(await page.getByText("지도 보기", { exact: true }).count(), 0);
-    assert.equal(await page.getByText("회사 평판", { exact: true }).count(), 0);
-    assert.equal(await page.getByText("최근 리뷰", { exact: true }).count(), 0);
-    assert.equal(await page.locator("#jobQuickTabs .quick-tab").count() >= 4, true);
-    assert.equal(await page.locator("#jobList .discovery-badge.new").count(), 1);
-    assert.equal(await page.locator("#jobList .job-card").count(), 3);
-    assert.match(await page.locator("#jobList .job-card").first().innerText(), /D-\d+ · 2099-12-31/);
-    await page.locator("#jobSort").selectOption("deadline");
-    assert.match(await page.locator("#jobList .job-card").first().innerText(), /2099-11-30/);
-    await page.locator("#deadlineFilter").selectOption("none");
-    assert.equal(await page.locator("#jobList .job-card").count(), 1);
-    assert.match(await page.locator("#jobList .job-card").first().innerText(), /Product Designer/);
-    await page.locator("#deadlineFilter").selectOption("");
-    await page.locator("#jobList .job-card").first().click();
-    assert.equal(await page.locator("#jobDetail button:not([disabled]):not(.detail-close-button)").count(), 0);
-
-    await page.locator("#statusFilter").selectOption("rejected");
-    assert.equal(await page.locator("#lifecycleFilter").inputValue(), "all");
-    await page.locator("#lifecycleFilter").selectOption("active");
-    assert.equal(await page.locator("#statusFilter").inputValue(), "");
-
-    await page.locator('[data-screen="resume"]').click();
-    assert.equal(await page.locator("#resumeForm input:not([disabled]), #resumeForm textarea:not([disabled]), #resumeForm select:not([disabled]), #resumeForm button:not([disabled])").count(), 0);
-    assert.match(await page.locator("#exampleBanner").innerText(), /읽기 전용/);
-    await page.locator('[data-screen="settings"]').click();
-    assert.equal(await page.locator("#personalSettingsForm input:not([disabled]), #personalSettingsForm textarea:not([disabled]), #personalSettingsForm select:not([disabled]), #personalSettingsForm button:not([disabled])").count(), 0);
-    await page.locator('[data-screen="companion"]').click();
-    assert.equal(await page.locator("#companionScreen button:not([disabled])").count(), 0);
+    for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+      const page = await browser.newPage({ viewport });
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+      await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+      assert.equal(await page.locator(".brand-name").innerText(), "FREE AGENT");
+      await assert.doesNotReject(() => page.locator(".brand-name").waitFor({ state: "visible" }));
+      assert.equal(await page.locator(".brand-line").getByText("나에게 맞는 팀을 고르는 구직 대시보드").count(), 0);
+      assert.equal(await page.locator(".brand-name").evaluate((element) => getComputedStyle(element).fontSize), "24px");
+      assert.equal(await page.locator("[data-primary-nav]").count(), 2);
+      assert.deepEqual(await page.locator("[data-primary-nav]").allTextContents(), ["구직공고 대시보드", "이력서 관리"]);
+      assert.match(await page.locator("#trackQuickTabs").innerText(), /주 목표 직무/);
+      assert.match(await page.locator("#trackQuickTabs").innerText(), /보조 직무/);
+      assert.equal(await page.locator("#jobRows tr[data-job-id]").count(), 3);
+      assert.equal(await page.locator("#jobRows [data-row-favorite]:not([disabled])").count(), 0);
+      assert.equal(await page.locator("thead th").count(), 12);
+      assert.equal((await page.locator("body").innerText()).includes("지도 보기"), false);
+      assert.equal((await page.locator("body").innerText()).includes("잡플래닛"), false);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+      await page.locator("#trackQuickTabs [data-quick]").first().click();
+      assert.notEqual(await page.locator("#trackFilter").inputValue(), "");
+      await page.locator("#resetFiltersButton").click();
+      await page.locator("#advancedFilters").evaluate((element) => { element.open = true; });
+      await page.locator("#statusFilter").selectOption("rejected");
+      assert.equal(await page.locator("#lifecycleFilter").inputValue(), "all");
+      await page.locator("#lifecycleFilter").selectOption("active");
+      assert.equal(await page.locator("#statusFilter").inputValue(), "");
+      assert.equal(await page.locator("#advancedFilters").getAttribute("open") !== null, true);
+      assert.equal(await page.locator("#savedFilterSelect").isDisabled(), false);
+      assert.equal(await page.locator("#saveCurrentFilter").isDisabled(), true);
+      await page.locator("#sortFilter").selectOption("deadline");
+      assert.equal(await page.locator("#jobRows tr[data-job-id]").count() > 0, true);
+      const pageSizeResponse = page.waitForResponse((response) => response.url().includes("pageSize=50") && response.request().method() === "GET");
+      await page.locator("#pageSizeSelect").selectOption("50");
+      assert.equal((await pageSizeResponse).status(), 200);
+      assert.equal(await page.locator("#pageSizeSelect").inputValue(), "50");
+      if (viewport.width > 760) {
+        assert.equal(await page.locator("#jobDetail").isVisible(), true);
+      } else {
+        assert.equal(await page.locator("#jobDetail").isVisible(), false);
+        await page.locator("#jobRows tr[data-job-id]").first().click();
+        await page.waitForFunction(() => document.querySelector("#jobDetail")?.classList.contains("mobile-open"));
+        assert.equal(await page.locator("#jobDetail").isVisible(), true);
+        await page.locator("#detailCloseButton").click();
+        assert.equal(await page.locator("#jobDetail").isVisible(), false);
+      }
+      await page.locator("#resumeManageButton").click();
+      await page.locator("#resumeCreateScreenButton").click();
+      assert.equal(await page.locator("#resumeCreateScreen").isVisible(), true);
+      assert.equal(await page.locator("#resumeCreateScreen .resume-v2-panel").count(), 3);
+      assert.deepEqual(await page.locator("#resumeCreateScreen .resume-v2-panel h2").allTextContents(), ["기본 정보 설정", "경력과 프로젝트", "기준 파일", "맞춤이력서 준비도"]);
+      assert.equal(await page.locator("#resumeCreateScreen form input:not([disabled]), #resumeCreateScreen form textarea:not([disabled]), #resumeCreateScreen form select:not([disabled])").count(), 0);
+      assert.match(await page.locator("#resumeReadiness").innerText(), /사이트 작성 이력서 기준/);
+      if (viewport.width > 760) assert.deepEqual(await page.locator("#resumeCreateScreen .resume-v2-panel").evaluateAll((items) => items.map((item) => Math.round(item.getBoundingClientRect().height))), [620, 620, 620]);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+      await page.locator("#resumeManageButton").click();
+      await page.locator("#resumeEditScreenButton").click();
+      assert.equal(await page.locator("#resumeEditScreen").isVisible(), true);
+      assert.equal(await page.locator("#resumeEditScreen .resume-management-card").count(), 4);
+      assert.equal(await page.locator("#resumeEditScreen [data-resume-edit-section]").count(), 4);
+      assert.equal(await page.locator("#editResumeDocumentList .resume-edit-file-item").count(), 2);
+      assert.equal(await page.locator("#resumeEditTextPanel").isVisible(), false);
+      await page.locator('[data-resume-edit-section="profile"]').click();
+      assert.equal(await page.locator("#resumeEditTextPanel").isVisible(), true);
+      await page.locator("#resumeEditCancelButton").click();
+      assert.equal(await page.locator("#resumeEditTextPanel").isVisible(), false);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+      await page.locator("#resumeManageButton").click();
+      await page.locator("#resumeReviewScreenButton").click();
+      assert.equal(await page.locator("#resumeReviewScreen").isVisible(), true);
+      await page.locator("#reviewJobList [data-review-job]").first().waitFor();
+      assert.deepEqual(await page.locator("#reviewStageTabs button span").allTextContents(), ["검토 필요", "제출 준비", "제출완료", "지원 결과", "보관함"]);
+      assert.equal(await page.locator("#reviewJobList [data-review-job]").count() > 0, true);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+      await page.locator("#settingsButton").click();
+      assert.equal(await page.locator("#settingsModal").isVisible(), true);
+      assert.equal(await page.locator("#settingsForm input:not([disabled]), #settingsForm textarea:not([disabled]), #settingsForm select:not([disabled])").count(), 0);
+      await page.locator('#settingsModal > .modal-dialog > header [data-close-modal="settingsModal"]').click();
+      await page.locator("#notificationButton").click();
+      assert.equal(await page.locator("#notificationDrawer").isVisible(), true);
+      await page.locator("#notificationDrawerCloseButton").click();
+      const retiredParallelPath = await page.request.get(`http://127.0.0.1:${port}/parity/index.html`);
+      assert.equal(retiredParallelPath.status(), 404);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
   } finally {
     await browser?.close();
     if (child.exitCode === null) {
@@ -107,9 +161,9 @@ test("demo dashboard loads as read-only and archived status filters remain usabl
   }
 });
 
-test("personal dashboard guides a new job through review, quality, approval, manual preparation, and submission", async () => {
+test("default Free Agent personal workflow connects review controls, submission cancellation, evidence, and inbox", async () => {
   const directory = preparePersonalProject();
-  const port = 23000 + (process.pid % 1000);
+  const port = 22000 + (process.pid % 1000);
   const base = `http://127.0.0.1:${port}`;
   const child = spawn(process.execPath, ["web-dashboard/server.mjs"], {
     cwd: directory,
@@ -120,230 +174,266 @@ test("personal dashboard guides a new job through review, quality, approval, man
   try {
     await waitForServer(child);
     const imported = await fetch(`${base}/api/jobs`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jobKey: "browser-personal-role",
-        companyName: "Example Company",
-        title: "Example Role",
-        status: "active",
-        sources: [{ platform: "direct", url: "https://example.invalid/browser", status: "active" }],
-      }),
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobKey: "parity-personal-role", companyName: "Example Organization", title: "Example Generalist", track: "Primary Track", status: "active", tailoringFocus: ["summary"], sources: [{ platform: "direct", url: "https://example.invalid/parity", status: "active" }] }),
+    }).then((response) => response.json());
+    await fetch(`${base}/api/resume`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobFamily: "General", jobRole: "Example Generalist", careerType: "experienced", yearsExperience: 3, headline: "문제를 구조화해 실행하는 지원자", summary: "여러 이해관계자의 요구를 정리하고 합의한 실행 기준에 따라 결과를 검토해 다음 개선으로 연결한 경험이 있습니다.", skills: ["문제 구조화", "협업"], experienceHighlights: ["요구사항을 실행 목록으로 정리하고 완료 결과를 확인했습니다."], editableSections: ["summary"] }),
     });
-    assert.equal(imported.status, 201);
+    const queuedJob = await fetch(`${base}/api/jobs`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobKey: "parity-companion-role", companyName: "Example Cooperative", title: "Example Coordinator", track: "Secondary Track", status: "active", tailoringFocus: ["summary"], sources: [{ platform: "direct", url: "https://example.invalid/companion", status: "active" }] }),
+    }).then((response) => response.json());
+    await fetch(`${base}/api/jobs/${queuedJob.jobId}/state`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ workflowStatus: "reviewing" }) });
+    await fetch(`${base}/api/jobs/${imported.jobId}/state`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ workflowStatus: "reviewing" }) });
+    const created = await fetch(`${base}/api/jobs/${imported.jobId}/package`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then((response) => response.json());
+    assert.equal(created.package.state, "approval_pending");
 
     browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
-    page.on("pageerror", (error) => { throw error; });
-    await page.goto(base, { waitUntil: "networkidle" });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    await page.goto(`${base}/`, { waitUntil: "networkidle" });
 
-    await page.locator('[data-screen="jobs"]').click();
-    assert.equal(await page.locator("#jobList .discovery-badge.new").count(), 1);
-    await page.locator(".saved-filter-panel summary").click();
-    await page.locator("#savedFilterName").fill("Synthetic active view");
-    await page.locator("#savedFilterDefault").check();
-    const filterSaved = page.waitForResponse((response) => response.url().endsWith("/api/saved-filters") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "저장" }).click();
-    assert.equal((await filterSaved).status(), 201);
-    assert.equal(await page.locator("#savedFilterSelect option").count(), 2);
-    await page.locator('[data-screen="home"]').click();
+    await page.locator("#advancedFilters").evaluate((element) => { element.open = true; });
+    await page.locator("#savedFilterName").fill("Example active view");
+    let savedFilterResponse = page.waitForResponse((response) => response.url().endsWith("/api/saved-filters") && response.request().method() === "POST");
+    await page.locator("#saveCurrentFilter").click();
+    assert.equal((await savedFilterResponse).status(), 201);
+    await page.locator("#savedFilterName").fill("Example active view updated");
+    savedFilterResponse = page.waitForResponse((response) => /\/api\/saved-filters\/[^/]+$/.test(response.url()) && response.request().method() === "PUT");
+    await page.locator("#saveCurrentFilter").click();
+    assert.equal((await savedFilterResponse).status(), 200);
+    const deleteFilterResponse = page.waitForResponse((response) => /\/api\/saved-filters\/[^/]+$/.test(response.url()) && response.request().method() === "DELETE");
+    await page.locator("#deleteSavedFilter").click();
+    assert.equal((await deleteFilterResponse).status(), 200);
+    assert.equal(await page.locator("#savedFilterSelect option").count(), 1);
 
-    await page.locator('[data-screen="companion"]').click();
-    const firstCompanion = page.waitForResponse((response) => response.url().endsWith("/api/companion/tasks") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "공고 수집 요청" }).click();
-    assert.equal((await firstCompanion).status(), 201);
-    assert.equal(await page.locator("[data-companion-task-id]").count(), 1);
-    const duplicateCompanion = page.waitForResponse((response) => response.url().endsWith("/api/companion/tasks") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "공고 수집 요청" }).click();
-    assert.equal((await duplicateCompanion).status(), 200);
-    assert.equal(await page.locator("[data-companion-task-id]").count(), 1);
+    await page.locator("#settingsButton").click();
+    await page.locator("#settingsDisplayName").fill("Example User Updated");
+    await page.locator('#sourceSettings [data-source-key="direct"] [data-source-field="collect"]').check();
+    const paritySettingsResponse = page.waitForResponse((response) => response.url().endsWith("/api/settings") && response.request().method() === "PATCH");
+    await page.locator("#settingsForm button[type=submit]").click();
+    assert.equal((await paritySettingsResponse).status(), 200);
+    const reloadResponse = page.waitForResponse((response) => response.url().endsWith("/api/bootstrap") && response.request().method() === "GET");
+    await page.locator("#reloadButton").click();
+    assert.equal((await reloadResponse).status(), 200);
 
-    await page.locator('[data-screen="resume"]').click();
-    await page.locator("#resumeJobFamily").fill("Operations");
-    await page.locator("#resumeJobRole").fill("Operations Specialist");
-    await page.locator("#resumeCareerType").selectOption("experienced");
-    await page.locator("#resumeYearsExperience").fill("3");
-    await page.locator("#resumeHeadline").fill("문제를 구조화하고 실행 결과를 검증하는 지원자");
-    await page.locator("#resumeSummary").fill("짧음");
-    await page.locator("#resumeSkills").fill("문제 구조화\n협업과 실행 관리");
-    await page.locator("#resumeHighlights").fill("여러 팀의 요구사항을 하나의 실행 목록으로 정리하고 결과를 검토했습니다.");
-    await page.getByRole("button", { name: "프로젝트 추가" }).click();
-    const projectCard = page.locator('[data-structured-id]').last();
-    await projectCard.locator('[data-structured-field="title"]').fill("운영 절차 점검");
-    await projectCard.locator('[data-structured-field="summary"]').fill("업무 인수인계 항목을 정리하고 완료 결과를 확인했습니다.");
-    await projectCard.locator('[data-structured-field="highlights"]').fill("누락 항목을 다음 점검 기준에 반영했습니다.");
-    await page.locator("[data-editable-section]").evaluateAll((inputs) => {
-      for (const input of inputs) input.checked = false;
+    const collectResponse = page.waitForResponse((response) => response.url().endsWith("/api/companion/tasks") && response.request().method() === "POST");
+    await page.locator("#requestJobCollectionButton").click();
+    assert.equal((await collectResponse).status(), 201);
+
+    await page.locator(`[data-job-id="${queuedJob.jobId}"]`).click();
+    await page.evaluate(() => {
+      window.__openedSourceUrls = [];
+      window.open = (url) => { window.__openedSourceUrls.push(String(url)); return null; };
     });
-    await page.locator('[data-editable-section="summary"]').check();
-    const saved = page.waitForResponse((response) => response.url().endsWith("/api/resume") && response.request().method() === "PUT");
-    await page.getByRole("button", { name: "이력서 기준 저장" }).click();
-    assert.equal((await saved).status(), 200);
-    await page.locator("#toast").waitFor({ state: "hidden" });
+    await page.locator("#jobDetail [data-open-source]").click();
+    assert.deepEqual(await page.evaluate(() => window.__openedSourceUrls), ["https://example.invalid/companion"]);
+    const favoriteResponse = page.waitForResponse((response) => /\/api\/jobs\/\d+\/state$/.test(response.url()) && response.request().method() === "PATCH");
+    await page.locator("#jobDetail [data-favorite-job]").click();
+    assert.equal((await favoriteResponse).status(), 200);
+    const generationResponse = page.waitForResponse((response) => response.url().endsWith("/api/companion/tasks") && response.request().method() === "POST");
+    await page.locator("#jobDetail [data-request-package]").click();
+    assert.equal((await generationResponse).status(), 201);
 
-    await page.locator('[data-screen="home"]').click();
-    assert.equal(await page.locator('[data-workflow-stage="review"]').count(), 1);
-    await page.locator('[data-workflow-stage="review"] button').click();
-    assert.match(page.url(), /#jobs\?job=\d+&focus=review$/);
-    assert.equal(await page.getByRole("button", { name: "공고별 작업본 만들기" }).count(), 0);
-    const reviewStarted = page.waitForResponse((response) => /\/api\/jobs\/\d+\/state$/.test(response.url()) && response.request().method() === "PATCH");
-    await page.getByRole("button", { name: "공고 검토 시작" }).click();
-    assert.equal((await reviewStarted).status(), 200);
-    await page.getByRole("button", { name: "공고별 작업본 만들기" }).waitFor();
-    const created = page.waitForResponse((response) => /\/api\/jobs\/\d+\/package$/.test(response.url()) && response.request().method() === "POST");
-    await page.getByRole("button", { name: "공고별 작업본 만들기" }).click();
-    assert.equal((await created).status(), 201);
-    await page.locator("#jobDetail .package-state", { hasText: "품질 보완 필요" }).waitFor();
-    assert.equal(await page.getByRole("button", { name: "문안 승인·PDF 생성" }).count(), 0);
-    assert.equal(await page.locator('[data-package-section-key]').count(), 1, await page.locator("#jobDetail").innerText());
+    await page.locator("#resumeManageButton").click();
+    await page.locator("#resumeReviewScreenButton").click();
+    await page.locator(`[data-review-job="${imported.jobId}"]`).click();
 
-    await page.locator('[data-package-section-key="summary"]').fill("업무 기준을 문서화하고 이해관계자와 우선순위를 합의한 뒤 실행 결과를 검토해 개선으로 연결했습니다.");
-    const revised = page.waitForResponse((response) => /\/api\/packages\/\d+$/.test(response.url()) && response.request().method() === "PUT");
-    await page.getByRole("button", { name: "수정 내용 저장" }).click();
-    assert.equal((await revised).status(), 200);
-    await page.locator("#jobDetail .package-state", { hasText: "승인 대기" }).waitFor();
+    await page.getByRole("button", { name: "수정 전/후 비교", exact: true }).click();
+    assert.equal(await page.locator("#comparisonModal").isVisible(), true);
+    await page.locator('#comparisonModal [data-close-modal="comparisonModal"]').last().click();
 
-    const approved = page.waitForResponse(
-      (response) => /\/api\/packages\/\d+\/approve$/.test(response.url()) && response.request().method() === "POST",
-      { timeout: 90000 },
-    );
-    await page.getByRole("button", { name: "문안 승인·PDF 생성" }).click();
-    assert.equal((await approved).status(), 200);
+    let responsePromise = page.waitForResponse((response) => /\/api\/packages\/\d+\/review$/.test(response.url()) && response.request().method() === "PATCH");
+    await page.getByRole("button", { name: "보완 요청", exact: true }).click();
+    assert.equal((await responsePromise).status(), 200);
+    await page.getByRole("button", { name: "직접 수정", exact: true }).click();
+    const editableSection = page.locator("#packageEditFields [data-package-edit-key]").first();
+    await editableSection.fill(`${await editableSection.inputValue()}\n합성 검토 내용을 반영했습니다.`);
+    const packageEditResponse = page.waitForResponse((response) => /\/api\/packages\/\d+$/.test(response.url()) && response.request().method() === "PUT");
+    await page.locator("#packageEditForm button[type=submit]").click();
+    assert.equal((await packageEditResponse).status(), 200);
 
-    const prepareButton = page.getByRole("button", { name: "수기 제출 준비" });
-    await prepareButton.waitFor();
-    assert.equal(await prepareButton.isEnabled(), true);
-    const prepared = page.waitForResponse((response) => /\/api\/packages\/\d+\/prepare$/.test(response.url()) && response.request().method() === "POST");
-    await prepareButton.click();
-    assert.equal((await prepared).status(), 200);
-    await page.locator("#jobDetail .package-state", { hasText: "제출 준비 완료" }).waitFor();
+    responsePromise = page.waitForResponse((response) => /\/api\/packages\/\d+\/review$/.test(response.url()) && response.request().method() === "PATCH");
+    await page.getByRole("button", { name: "보류", exact: true }).click();
+    assert.equal((await responsePromise).status(), 200);
+    await page.getByRole("button", { name: "보류 해제", exact: true }).waitFor();
+    responsePromise = page.waitForResponse((response) => /\/api\/packages\/\d+\/review$/.test(response.url()) && response.request().method() === "PATCH");
+    await page.getByRole("button", { name: "보류 해제", exact: true }).click();
+    assert.equal((await responsePromise).status(), 200);
 
-    const submitted = page.waitForResponse((response) => /\/api\/packages\/\d+\/submitted$/.test(response.url()) && response.request().method() === "POST");
-    await page.getByRole("button", { name: "제출 완료 기록" }).click();
-    assert.equal((await submitted).status(), 200);
-    await page.locator("#jobDetail .package-state", { hasText: "제출 완료" }).waitFor();
-    assert.equal(await page.getByRole("button", { name: "제출 완료 기록" }).count(), 0);
-    const submissionBeforeOutcome = await fetch(`${base}/api/dashboard`).then((response) => response.json());
-    const frozenSubmission = {
-      state: submissionBeforeOutcome.jobs[0].package.state,
-      checksum: submissionBeforeOutcome.jobs[0].package.checksum,
-      pdfChecksum: submissionBeforeOutcome.jobs[0].package.pdf.checksum,
-    };
+    await page.getByRole("button", { name: "문안 승인·PDF 생성", exact: true }).click();
+    assert.equal(await page.locator("#confirmationModal").isVisible(), true);
+    await page.locator("#confirmationCancelButton").click();
+    assert.equal(await page.locator("#confirmationModal").isVisible(), false);
+    assert.equal(await page.getByRole("button", { name: "문안 승인·PDF 생성", exact: true }).count(), 1);
+    responsePromise = page.waitForResponse((response) => /\/api\/packages\/\d+\/approve$/.test(response.url()), { timeout: 90000 });
+    await page.getByRole("button", { name: "문안 승인·PDF 생성", exact: true }).click();
+    await page.locator("#confirmationConfirmButton").click();
+    assert.equal((await responsePromise).status(), 200);
+    await page.getByRole("button", { name: "수기 제출 준비", exact: true }).waitFor();
 
-    await page.locator(".outcome-panel .outcome-form").waitFor();
-    await page.locator('.outcome-form select[name="resultType"]').selectOption("document_passed");
-    await page.locator('.outcome-form input[name="summary"]').fill("합성 채용 사이트에서 다음 단계 안내를 확인했습니다.");
-    const outcomeRecorded = page.waitForResponse((response) => /\/api\/jobs\/\d+\/outcomes$/.test(response.url()) && response.request().method() === "POST");
-    await page.getByRole("button", { name: "결과 추가" }).click();
-    assert.equal((await outcomeRecorded).status(), 201);
-    await page.locator("[data-outcome-event-id]").waitFor();
-    assert.equal(await page.locator("[data-outcome-event-id]").count(), 1);
-    await page.locator("[data-outcome-event-id] .outcome-correction > summary").click();
-    await page.locator("[data-outcome-event-id] .correction-form input[placeholder='정정 사유 · 필수']").fill("채용 사이트 상태를 다시 확인했습니다.");
-    const correctionRecorded = page.waitForResponse((response) => /\/api\/jobs\/\d+\/outcomes\/\d+\/corrections$/.test(response.url()) && response.request().method() === "POST");
-    await page.locator("[data-outcome-event-id] .correction-form").getByRole("button", { name: "정정 기록 추가" }).click();
-    assert.equal((await correctionRecorded).status(), 201);
-    await page.locator("[data-outcome-event-id]").nth(1).waitFor();
-    assert.equal(await page.locator("[data-outcome-event-id]").count(), 2);
-    assert.match(await page.locator("[data-outcome-event-id]").last().innerText(), /이후 정정 기록 있음/);
+    responsePromise = page.waitForResponse((response) => /\/api\/packages\/\d+\/review$/.test(response.url()) && response.request().method() === "PATCH");
+    await page.getByRole("button", { name: "승인 취소", exact: true }).click();
+    assert.equal((await responsePromise).status(), 200);
+    await page.getByRole("button", { name: "문안 승인·PDF 생성", exact: true }).waitFor();
+    responsePromise = page.waitForResponse((response) => /\/api\/packages\/\d+\/approve$/.test(response.url()), { timeout: 90000 });
+    await page.getByRole("button", { name: "문안 승인·PDF 생성", exact: true }).click();
+    await page.locator("#confirmationConfirmButton").click();
+    assert.equal((await responsePromise).status(), 200);
+    await page.getByRole("button", { name: "수기 제출 준비", exact: true }).waitFor();
 
-    await page.locator('.follow-up-form input[name="followTitle"]').fill("다음 단계 일정 확인");
-    await page.locator('.follow-up-form select[name="sourceEvent"]').selectOption({ index: 1 });
-    await page.locator('.follow-up-form input[name="offsetDays"]').fill("2");
-    const followUpCreated = page.waitForResponse((response) => /\/api\/jobs\/\d+\/follow-ups$/.test(response.url()) && response.request().method() === "POST");
-    await page.getByRole("button", { name: "후속조치 추가" }).click();
-    assert.equal((await followUpCreated).status(), 201);
-    await page.locator("[data-follow-up-id]").waitFor();
-    assert.equal(await page.locator("[data-follow-up-id]").count(), 1);
+    responsePromise = page.waitForResponse((response) => /\/api\/packages\/\d+\/prepare$/.test(response.url()));
+    await page.getByRole("button", { name: "수기 제출 준비", exact: true }).click();
+    await page.locator("#confirmationConfirmButton").click();
+    assert.equal((await responsePromise).status(), 200);
+    await page.getByRole("button", { name: "제출 준비 취소", exact: true }).waitFor();
 
-    await page.locator('[data-screen="home"]').click();
-    assert.equal(await page.locator("#workflowFollowUpCount").innerText(), "1");
-    assert.equal(await page.locator(".follow-up-workbox .workflow-task").count(), 1);
-    await page.locator(".follow-up-workbox .workflow-task").getByRole("button", { name: "결과·후속조치 열기" }).click();
-    await page.locator("[data-follow-up-id]").waitFor();
+    responsePromise = page.waitForResponse((response) => /\/api\/packages\/\d+\/cancel-prepare$/.test(response.url()));
+    await page.getByRole("button", { name: "제출 준비 취소", exact: true }).click();
+    await page.locator("#confirmationConfirmButton").click();
+    assert.equal((await responsePromise).status(), 200);
+    await page.getByRole("button", { name: "수기 제출 준비", exact: true }).waitFor();
 
-    await page.locator('[data-screen="inbox"]').click();
-    assert.equal(await page.locator("[data-notification-id]").count(), 3);
-    assert.equal(await page.locator("#inboxUnreadBadge").innerText(), "3");
-    const notificationRead = page.waitForResponse((response) => /\/api\/inbox\/\d+\/read$/.test(response.url()) && response.request().method() === "POST");
-    const outcomeDeepLink = page.waitForURL(/#jobs\?job=\d+&focus=outcomes$/);
-    await page.locator("[data-notification-id]").first().getByRole("button", { name: "확인하고 열기" }).click();
-    assert.equal((await notificationRead).status(), 200);
-    await outcomeDeepLink;
-    assert.match(page.url(), /#jobs\?job=\d+&focus=outcomes$/);
-    await page.locator("[data-follow-up-id]").waitFor();
-    const followUpCompleted = page.waitForResponse((response) => /\/api\/follow-ups\/[^/]+\/complete$/.test(response.url()) && response.request().method() === "POST");
-    await page.locator("[data-follow-up-id]").getByRole("button", { name: "완료" }).click();
-    assert.equal((await followUpCompleted).status(), 200);
-    await page.locator("[data-follow-up-id].completed").waitFor();
+    responsePromise = page.waitForResponse((response) => /\/api\/packages\/\d+\/prepare$/.test(response.url()));
+    await page.getByRole("button", { name: "수기 제출 준비", exact: true }).click();
+    await page.locator("#confirmationConfirmButton").click();
+    assert.equal((await responsePromise).status(), 200);
+    responsePromise = page.waitForResponse((response) => /\/api\/packages\/\d+\/submitted$/.test(response.url()));
+    await page.getByRole("button", { name: "제출 완료 기록", exact: true }).click();
+    await page.locator("#confirmationCheck").check();
+    await page.locator("#confirmationConfirmButton").click();
+    assert.equal((await responsePromise).status(), 200);
 
-    const dashboard = await fetch(`${base}/api/dashboard`).then((response) => response.json());
-    assert.equal(dashboard.jobs[0].package.state, "submitted");
-    assert.deepEqual({
-      state: dashboard.jobs[0].package.state,
-      checksum: dashboard.jobs[0].package.checksum,
-      pdfChecksum: dashboard.jobs[0].package.pdf.checksum,
-    }, frozenSubmission);
-    assert.equal(dashboard.jobs[0].workflow.stage, "complete");
-    assert.equal(dashboard.jobs[0].package.pdf.available, true);
-    assert.equal(dashboard.resume.structuredItems.length, 1);
-    assert.equal(dashboard.resume.structuredItems[0].kind, "project");
-    assert.equal(dashboard.inbox.items.length, 3);
-    const outcomes = await fetch(`${base}/api/jobs/${dashboard.jobs[0].id}/outcomes`).then((response) => response.json());
-    assert.equal(outcomes.outcomes.events.length, 2);
-    assert.equal(outcomes.outcomes.events.some((item) => item.correctionOfEventId), true);
-    assert.equal(outcomes.outcomes.followUps[0].status, "completed");
-  } finally {
-    await browser?.close();
-    if (child.exitCode === null) {
-      child.kill("SIGTERM");
-      await new Promise((resolve) => child.once("exit", resolve));
-    }
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
+    await page.getByRole("button", { name: "지원 결과 기록", exact: true }).click();
+    await page.locator("#outcomeType").selectOption("document_passed");
+    await page.locator("#outcomeNote").fill("합성 채용 페이지에서 다음 단계 안내를 확인했습니다.");
+    await page.locator("#outcomeEvidence").setInputFiles({ name: "result.png", mimeType: "image/png", buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]) });
+    const outcomeResponse = page.waitForResponse((response) => /\/api\/jobs\/\d+\/outcomes$/.test(response.url()));
+    const evidenceResponse = page.waitForResponse((response) => /\/api\/outcomes\/\d+\/evidence$/.test(response.url()) && response.request().method() === "POST");
+    await page.locator("#outcomeForm button[type=submit]").click();
+    assert.equal((await outcomeResponse).status(), 201);
+    assert.equal((await evidenceResponse).status(), 201);
+    await page.locator("#outcomeLedgerArea [data-correct-outcome]").first().waitFor();
+    await page.locator("#outcomeLedgerArea [data-correct-outcome]").first().click();
+    await page.locator("#outcomeCorrectionType").selectOption("interview_scheduled");
+    await page.locator("#outcomeCorrectionReason").fill("합성 결과 상태를 다시 확인했습니다.");
+    await page.locator("#outcomeCorrectionSummary").fill("합성 면접 일정으로 상태를 바로잡았습니다.");
+    const correctionResponse = page.waitForResponse((response) => /\/api\/jobs\/\d+\/outcomes\/\d+\/corrections$/.test(response.url()));
+    await page.locator("#outcomeCorrectionForm button[type=submit]").click();
+    assert.equal((await correctionResponse).status(), 201);
+    await page.getByText(/교정 이유:/).waitFor();
+    assert.match(await page.locator("#outcomeLedgerArea").innerText(), /교정 이유/);
 
-test("personal settings screen edits generic search criteria and registers a document for reanalysis", async () => {
-  const directory = preparePersonalProject();
-  const port = 27000 + (process.pid % 1000);
-  const base = `http://127.0.0.1:${port}`;
-  const child = spawn(process.execPath, ["web-dashboard/server.mjs"], {
-    cwd: directory,
-    env: { ...process.env, APP_MODE: "personal", PORT: String(port) },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let browser;
-  try {
-    await waitForServer(child);
-    browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
-    await page.goto(base, { waitUntil: "networkidle" });
-    await page.locator('[data-screen="settings"]').click();
-    await page.locator("#settingsTargetRoles").waitFor();
-    await page.locator("#settingsTargetRoles").fill("Generic Researcher\nGeneric Coordinator");
-    await page.locator("#settingsTracks").fill("Primary\nAlternative");
-    await page.locator("#settingsRegions").fill("Remote");
-    await page.locator('[data-settings-source="direct"] [data-source-field="collect"]').check();
-    const settingsSaved = page.waitForResponse((response) => response.url().endsWith("/api/settings") && response.request().method() === "PATCH");
-    await page.getByRole("button", { name: "개인 설정 저장" }).click();
-    assert.equal((await settingsSaved).status(), 200);
-    await page.locator('[data-screen="settings"]').click();
-    assert.equal(await page.locator("#settingsTargetRoles").inputValue(), "Generic Researcher\nGeneric Coordinator");
+    await page.locator("#outcomeLedgerArea [data-add-follow-up]").click();
+    await page.locator("#followUpName").fill("합성 면접 준비 확인");
+    const followUpResponse = page.waitForResponse((response) => /\/api\/jobs\/\d+\/follow-ups$/.test(response.url()));
+    await page.locator("#followUpForm button[type=submit]").click();
+    assert.equal((await followUpResponse).status(), 201);
+    await page.locator('#outcomeLedgerArea [data-follow-up-action="complete"]').waitFor();
+    const completeResponse = page.waitForResponse((response) => /\/api\/follow-ups\/[^/]+\/complete$/.test(response.url()));
+    await page.locator('#outcomeLedgerArea [data-follow-up-action="complete"]').click();
+    assert.equal((await completeResponse).status(), 200);
+    assert.match(await page.locator("#outcomeLedgerArea").innerText(), /완료/);
+    await page.locator("#outcomeLedgerArea [data-add-follow-up]").click();
+    await page.locator("#followUpName").fill("합성 결과 확인 취소 테스트");
+    const cancelFollowUpCreate = page.waitForResponse((response) => /\/api\/jobs\/\d+\/follow-ups$/.test(response.url()));
+    await page.locator("#followUpForm button[type=submit]").click();
+    assert.equal((await cancelFollowUpCreate).status(), 201);
+    const cancelFollowUpResponse = page.waitForResponse((response) => /\/api\/follow-ups\/[^/]+\/cancel$/.test(response.url()));
+    await page.locator('#outcomeLedgerArea [data-follow-up-action="cancel"]').click();
+    assert.equal((await cancelFollowUpResponse).status(), 200);
+    assert.match(await page.locator("#outcomeLedgerArea").innerText(), /취소/);
 
-    await page.locator('[data-screen="resume"]').click();
-    await page.locator("#personalDocumentFile").setInputFiles({
-      name: "synthetic-resume.pdf",
-      mimeType: "application/pdf",
-      buffer: Buffer.from("%PDF-1.4 synthetic browser resume"),
-    });
-    const uploaded = page.waitForResponse((response) => response.url().includes("/api/settings/documents?") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "문서 등록" }).click();
-    assert.equal((await uploaded).status(), 201);
-    await page.locator('[data-analysis-document-id]').check();
-    const analysisQueued = page.waitForResponse((response) => response.url().endsWith("/api/companion/tasks") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "선택 문서 다시 분석" }).click();
-    assert.equal((await analysisQueued).status(), 201);
-    assert.equal(await page.locator('[data-companion-task-id]').count(), 1);
+    await page.locator("#resumeManageButton").click();
+    await page.locator("#resumeCreateScreenButton").click();
+    await page.locator('[data-career-type="career_change"]').click();
+    assert.equal(await page.locator('[data-career-type="career_change"]').getAttribute("class").then((value) => value.includes("active")), true);
+    await page.locator("#resumeSkillInput").fill("Example Skill");
+    await page.locator("#resumeSkillAddButton").click();
+    assert.equal(await page.locator('[data-remove-resume-chip="skill"][data-value="Example Skill"]').count(), 1);
+    await page.locator('[data-remove-resume-chip="skill"][data-value="Example Skill"]').click();
+    assert.equal(await page.locator('[data-remove-resume-chip="skill"][data-value="Example Skill"]').count(), 0);
+    await page.locator("#supplementOpenButton").click();
+    assert.equal(await page.locator("#supplementModal").isVisible(), true);
+    await page.locator('#supplementModal [data-close-modal="supplementModal"]').last().click();
+    assert.equal(await page.locator("#supplementModal").isVisible(), false);
+    await page.locator('[data-add-item="experience"]').click();
+    await page.locator("#structuredItemKind").selectOption("project");
+    await page.locator("#structuredItemLabel").fill("합성 운영 개선 프로젝트");
+    await page.locator("#structuredItemOrganization").fill("Example Organization");
+    await page.locator("#structuredItemRole").fill("Coordinator");
+    await page.locator("#structuredItemEngagement").fill("개인 프로젝트");
+    await page.locator("#structuredItemStartDate").fill("2025-01");
+    await page.locator("#structuredItemEndDate").fill("2025-06");
+    await page.locator("#structuredItemSummary").fill("합성 데이터로 검수 절차를 정리했습니다.");
+    await page.locator("#structuredItemSkills").fill("문제 구조화\n품질 점검");
+    await page.locator("#structuredItemLinks").fill("https://example.invalid/project");
+    const structuredResponse = page.waitForResponse((response) => response.url().endsWith("/api/resume/structured") && response.request().method() === "PUT");
+    await page.locator("#structuredItemForm button[type=submit]").click();
+    assert.equal((await structuredResponse).status(), 200);
+    assert.match(await page.locator("#structuredItemList").innerText(), /합성 운영 개선 프로젝트/);
+    const syntheticPdf = Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n");
+    let documentResponse = page.waitForResponse((response) => response.url().includes("/api/settings/documents?") && response.request().method() === "POST");
+    await page.locator("#resumeDocumentFile").setInputFiles({ name: "example-resume.pdf", mimeType: "application/pdf", buffer: syntheticPdf });
+    assert.equal((await documentResponse).status(), 201);
+    const originalDocumentId = await page.locator("#resumeDocumentReplace option").nth(1).getAttribute("value");
+    await page.locator("#resumeDocumentReplace").selectOption(originalDocumentId);
+    documentResponse = page.waitForResponse((response) => response.url().includes("/api/settings/documents?") && response.request().method() === "POST");
+    await page.locator("#resumeDocumentFile").setInputFiles({ name: "example-resume-updated.pdf", mimeType: "application/pdf", buffer: Buffer.concat([syntheticPdf, Buffer.from("updated")]) });
+    assert.equal((await documentResponse).status(), 201);
+    const analysisResponse = page.waitForResponse((response) => response.url().endsWith("/api/companion/tasks") && response.request().method() === "POST");
+    await page.locator("#requestDocumentAnalysisButton").click();
+    assert.equal((await analysisResponse).status(), 201);
+
+    await page.locator("#customSectionAddButton").click();
+    await page.locator("#customSectionLabel").fill("Example Community Work");
+    await page.locator("#customSectionValue").fill("합성 커뮤니티 운영 사례");
+    const customResponse = page.waitForResponse((response) => response.url().endsWith("/api/resume") && response.request().method() === "PUT");
+    await page.locator("#customSectionForm button[type=submit]").click();
+    assert.equal((await customResponse).status(), 200);
+    assert.match(await page.locator("#customSectionList").innerText(), /Example Community Work/);
+    await page.locator("#customSectionList [data-edit-custom]").click();
+    await page.locator("#customSectionValue").fill("수정된 합성 커뮤니티 운영 사례");
+    const customEditResponse = page.waitForResponse((response) => response.url().endsWith("/api/resume") && response.request().method() === "PUT");
+    await page.locator("#customSectionForm button[type=submit]").click();
+    assert.equal((await customEditResponse).status(), 200);
+    assert.match(await page.locator("#customSectionList").innerText(), /수정된 합성/);
+    const customDeleteResponse = page.waitForResponse((response) => response.url().endsWith("/api/resume") && response.request().method() === "PUT");
+    await page.locator("#customSectionList [data-delete-custom]").click();
+    assert.equal((await customDeleteResponse).status(), 200);
+    assert.equal(await page.locator("#customSectionList [data-edit-custom]").count(), 0);
+    const archiveButton = page.locator("#resumeDocumentList [data-archive-document]").first();
+    const archiveId = await archiveButton.getAttribute("data-archive-document");
+    await archiveButton.click();
+    const archiveResponse = page.waitForResponse((response) => response.url().endsWith(`/api/settings/documents/${archiveId}`) && response.request().method() === "DELETE");
+    await page.locator("#confirmationConfirmButton").click();
+    assert.equal((await archiveResponse).status(), 200);
+    await page.locator("#resumeManageButton").click();
+    await page.locator("#resumeEditScreenButton").click();
+    assert.equal(await page.locator("#editStructuredSummary").isVisible(), true);
+    const purgeButton = page.locator(`#editResumeDocumentList [data-delete-document="${archiveId}"]`);
+    await purgeButton.click();
+    await page.locator("#confirmationCheck").check();
+    const purgeResponse = page.waitForResponse((response) => response.url().endsWith(`/api/settings/documents/${archiveId}/purge`) && response.request().method() === "DELETE");
+    await page.locator("#confirmationConfirmButton").click();
+    assert.equal((await purgeResponse).status(), 200);
+    assert.equal(await page.locator(`#editResumeDocumentList [data-delete-document="${archiveId}"]`).count(), 0);
+
+    await page.locator("#notificationBadge").waitFor({ state: "visible" });
+    await page.locator("#notificationButton").click();
+    responsePromise = page.waitForResponse((response) => response.url().endsWith("/api/inbox/read-all"));
+    await page.locator("#notificationMarkAllButton").click();
+    assert.equal((await responsePromise).status(), 200);
+    assert.equal(await page.locator("#notificationBadge").isVisible(), false);
+    await page.locator("#notificationOpenAllButton").click();
+    assert.equal(await page.locator("#notificationModal").isVisible(), true);
+    await page.locator('#notificationModal button[data-close-modal="notificationModal"]').click();
+    assert.equal(await page.locator("#notificationModal").isVisible(), false);
+    assert.deepEqual(errors, []);
   } finally {
     await browser?.close();
     if (child.exitCode === null) {
@@ -382,36 +472,22 @@ test("large personal dashboard paginates summaries and loads only the selected j
     await waitForServer(child);
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
-    await page.goto(base, { waitUntil: "networkidle" });
-    await page.locator('[data-screen="jobs"]').click();
-    assert.equal(await page.locator("#jobList .job-card").count(), 30);
-    assert.equal(await page.locator("#jobCount").innerText(), "205건");
-    assert.equal(await page.locator("#jobPageStatus").innerText(), "1 / 7");
-    const firstPageFirst = await page.locator("#jobList .job-card").first().innerText();
-
-    const secondPage = page.waitForResponse((response) => {
-      if (!response.url().includes("/api/jobs?")) return false;
-      return new URL(response.url()).searchParams.get("page") === "2";
-    });
-    await page.getByRole("button", { name: "다음" }).click();
-    assert.equal((await secondPage).status(), 200);
-    await page.locator("#jobPageStatus", { hasText: "2 / 7" }).waitFor();
-    assert.equal(await page.locator("#jobList .job-card").count(), 30);
-    assert.notEqual(await page.locator("#jobList .job-card").first().innerText(), firstPageFirst);
-
-    const detailResponse = page.waitForResponse((response) => /\/api\/jobs\/\d+$/.test(response.url()) && response.request().method() === "GET");
-    await page.locator("#jobList .job-card").first().click();
-    assert.equal((await detailResponse).status(), 200);
-    await page.locator("#jobDetail .source-row").waitFor();
-    assert.equal(await page.locator("#jobDetail .source-row").count(), 1);
-
-    const lightweight = await page.evaluate(async () => {
-      const response = await fetch("/api/jobs?page=1&pageSize=30&lifecycle=active");
-      return response.json();
-    });
-    assert.equal(lightweight.items.length, 30);
-    assert.equal(JSON.stringify(lightweight.items).includes("example.invalid/jobs"), false);
-    assert.equal(Object.hasOwn(lightweight.items[0], "scoreBreakdown"), false);
+    await page.goto(`${base}/`, { waitUntil: "networkidle" });
+    assert.equal(await page.locator("#jobRows tr[data-job-id]").count(), 20);
+    assert.match(await page.locator("#resultTitle").innerText(), /205개/);
+    let parityPageResponse = page.waitForResponse((response) => response.url().includes("/api/jobs?") && new URL(response.url()).searchParams.get("page") === "2");
+    await page.locator("#pageNextButton").click();
+    assert.equal((await parityPageResponse).status(), 200);
+    await page.locator('#pageButtons [data-page="2"].active').waitFor();
+    parityPageResponse = page.waitForResponse((response) => response.url().includes("/api/jobs?") && new URL(response.url()).searchParams.get("page") === "1");
+    await page.locator("#pagePrevButton").click();
+    assert.equal((await parityPageResponse).status(), 200);
+    await page.locator('#pageButtons [data-page="1"].active').waitFor();
+    parityPageResponse = page.waitForResponse((response) => response.url().includes("/api/jobs?") && new URL(response.url()).searchParams.get("page") === "11");
+    await page.locator("#pageLastButton").click();
+    assert.equal((await parityPageResponse).status(), 200);
+    await page.locator('#pageButtons [data-page="11"].active').waitFor();
+    assert.equal(await page.locator("#jobRows tr[data-job-id]").count(), 5);
   } finally {
     await browser?.close();
     if (child.exitCode === null) {

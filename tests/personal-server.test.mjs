@@ -375,6 +375,17 @@ test("personal settings and documents can be changed after onboarding without ex
     assert.equal(fs.statSync(documentRoot).mode & 0o777, 0o700);
     assert.equal(fs.statSync(path.join(documentRoot, "source.pdf")).mode & 0o777, 0o600);
 
+    const opened = await fetch(`${base}/api/settings/documents/${second.payload.documentId}/file`);
+    assert.equal(opened.status, 200);
+    assert.equal(opened.headers.get("cache-control"), "private, no-store");
+    assert.equal(Buffer.from(await opened.arrayBuffer()).equals(Buffer.from("%PDF-1.4 replacement synthetic resume")), true);
+    const archivedRoot = path.join(directory, "data", "private", "documents", first.payload.documentId);
+    const purged = await jsonRequest(base, `/api/settings/documents/${first.payload.documentId}/purge`, { method: "DELETE", body: {} });
+    assert.equal(purged.response.status, 200, purged.payload.error);
+    assert.equal(purged.payload.documents.some((item) => item.id === first.payload.documentId), false);
+    assert.equal(purged.payload.deletion.status, "deleted");
+    assert.equal(fs.existsSync(archivedRoot), false);
+
     const analysis = await jsonRequest(base, "/api/companion/tasks", {
       method: "POST", body: { kind: "analyze_documents", documentIds: [second.payload.documentId] },
     });

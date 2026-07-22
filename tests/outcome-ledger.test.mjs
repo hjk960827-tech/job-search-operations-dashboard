@@ -17,6 +17,7 @@ import {
   listPendingFollowUps,
   listLocalNotifications,
   markNotificationRead,
+  markAllNotificationsRead,
   transitionFollowUp,
 } from "../lib/outcome-ledger.mjs";
 
@@ -204,6 +205,18 @@ test("the local inbox uses internal deep links, prevents duplicate notifications
     assert.equal(after.items[0].read, true);
     const again = markNotificationRead(value.db, before.items[0].id);
     assert.equal(again.unreadCount, 0);
+  } finally { cleanup(value); }
+});
+
+test("all local notifications can be marked read in one idempotent operation", () => {
+  const value = fixture("local-inbox-all");
+  try {
+    updateApplicationState(value.db, value.jobId, { workflowStatus: "applied" });
+    appendApplicationEvent(value.db, value.jobId, { type: "document_passed", occurredAt: "2026-07-21T05:00:00.000Z" });
+    appendApplicationEvent(value.db, value.jobId, { type: "interview_scheduled", occurredAt: "2026-07-22T05:00:00.000Z" });
+    assert.equal(listLocalNotifications(value.db).unreadCount, 2);
+    assert.equal(markAllNotificationsRead(value.db).unreadCount, 0);
+    assert.equal(markAllNotificationsRead(value.db).unreadCount, 0);
   } finally { cleanup(value); }
 });
 

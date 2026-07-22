@@ -1,12 +1,18 @@
-# Job Search Operations Dashboard
+# Free Agent (FA)
 
 > A local-first, Korea-first job search operations dashboard for multiple job
-> families. It works as a companion to Codex or Claude and keeps personal data
-> outside Git.
+> families. Free Agent helps users find, compare, and manage applications to
+> teams that fit their career direction while keeping personal data outside Git.
 
 공고 출처 비교, 중복 정리, 관심·지원 상태, 이력서 작성 기준을 하나의 로컬
 대시보드에서 관리하는 프로젝트입니다. 첫 실행은 실제 개인정보가 없는 합성
-예시 데이터로 시작합니다. 현재 버전은 `0.4.0`입니다.
+예시 데이터로 시작합니다. 회사가 사용자를 고르는 관점이 아니라 사용자가 자신의
+커리어와 팀컬러에 맞는 회사를 비교하고 선택하는 구직 운영 도구를 지향합니다.
+현재 버전은 `0.5.0`입니다.
+
+`FREE AGENT` 화면은 `http://127.0.0.1:8766/`에서 열립니다. 별도 모바일 앱이
+아니라 같은 프론트엔드의 반응형 레이아웃이며, 구현되지 않은 AI 추천을 제공한다고
+표현하지 않습니다.
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&repo=1298501275&skip_quickstart=true)
 
@@ -33,8 +39,8 @@
 - 등록 문서는 보존 기간만으로 자동 삭제하지 않으며 비활성 문서에 대한 명시적 삭제 명령만 제공합니다.
 - 잡플래닛 평점·리뷰 수집·분석 기능은 제공하지 않습니다.
 
-V2와 후속 V3 프론트엔드는 같은 로컬 백엔드를 사용합니다. 지원 기능과 쓰기 가능
-여부는 `GET /api/ui-contract`의 버전 계약을 기준으로 판단하며, 상세 이관 순서는
+FA 프론트엔드는 배포판 로컬 백엔드를 사용합니다. 지원 기능과 쓰기 가능 여부는
+`GET /api/ui-contract`의 버전 계약을 기준으로 판단하며, 상세 구조와 이관 기록은
 [프론트엔드 구조 문서](docs/FRONTEND_ARCHITECTURE.md)에 정리되어 있습니다.
 
 ## 빠른 시작

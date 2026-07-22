@@ -32,7 +32,7 @@ test("saved filters preserve only generic UI conditions and one optional default
     assert.equal(items.filter((item) => item.isDefault).length, 1);
     assert.equal(items.find((item) => item.id === second.id).isDefault, true);
     assert.equal(items.find((item) => item.id === first.id).isDefault, false);
-    assert.deepEqual(Object.keys(items[0].filters).sort(), ["deadline", "favorite", "lifecycle", "platform", "search", "sort", "status", "track"]);
+    assert.deepEqual(Object.keys(items[0].filters).sort(), ["condition", "deadline", "favorite", "lifecycle", "platform", "region", "score", "search", "sort", "status", "track"]);
     assert.equal(deleteSavedFilter(value.db, first.id).length, 1);
   } finally {
     value.db.close();

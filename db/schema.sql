@@ -173,12 +173,14 @@ CREATE TABLE IF NOT EXISTS resume_structured_items (
   title TEXT NOT NULL,
   organization TEXT NOT NULL DEFAULT '',
   role TEXT NOT NULL DEFAULT '',
+  engagement_type TEXT NOT NULL DEFAULT '',
   location TEXT NOT NULL DEFAULT '',
   start_date TEXT NOT NULL DEFAULT '',
   end_date TEXT NOT NULL DEFAULT '',
   summary TEXT NOT NULL DEFAULT '',
   highlights_json TEXT NOT NULL DEFAULT '[]',
   skills_json TEXT NOT NULL DEFAULT '[]',
+  portfolio_links_json TEXT NOT NULL DEFAULT '[]',
   source_refs_json TEXT NOT NULL DEFAULT '[]',
   display_order INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
@@ -299,6 +301,13 @@ CREATE TABLE IF NOT EXISTS package_submissions (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS package_review_states (
+  package_id INTEGER PRIMARY KEY REFERENCES application_packages(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK(status IN ('active', 'revision_requested', 'on_hold')),
+  note TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS application_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_key TEXT NOT NULL UNIQUE,
@@ -318,6 +327,16 @@ CREATE TABLE IF NOT EXISTS application_events (
   correction_of_event_id INTEGER REFERENCES application_events(id),
   correction_reason TEXT NOT NULL DEFAULT '',
   occurred_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS outcome_evidence_files (
+  event_id INTEGER PRIMARY KEY REFERENCES application_events(id) ON DELETE CASCADE,
+  internal_path TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK(size_bytes > 0),
+  sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

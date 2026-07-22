@@ -3,575 +3,206 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="공고 탐색, 출처 비교, 지원 상태와 이력서 기준을 한곳에서 관리합니다.">
-    <title>Job Search Operations Dashboard</title>
+    <meta name="description" content="공고 탐색부터 맞춤문서 검토와 수기 제출 기록까지 한곳에서 관리합니다.">
+    <title>FREE AGENT</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
-    <div class="shell">
+    <div class="app-shell">
       <header class="topbar">
-        <div class="brand-and-nav">
-          <h1>JOB SEARCH OPS</h1>
-          <nav class="tabs" aria-label="주요 화면">
-            <button class="tab active" type="button" data-screen="home">작업함</button>
-            <button class="tab" type="button" data-screen="jobs">구직공고 대시보드</button>
-            <button class="tab" type="button" data-screen="resume">이력서 관리</button>
-            <button class="tab" type="button" data-screen="companion">에이전트 작업</button>
-            <button class="tab" type="button" data-screen="inbox">알림 <span id="inboxUnreadBadge" class="tab-badge" hidden>0</span></button>
-            <button class="tab" type="button" data-screen="settings">설정</button>
+        <div class="brand-line">
+          <p class="brand-name">FREE AGENT</p>
+          <nav class="section-nav" aria-label="대시보드 화면 전환">
+            <button id="jobsScreenButton" class="section-nav-link active" type="button" data-primary-nav="jobs">구직공고 대시보드</button>
+            <span class="section-nav-divider" aria-hidden="true">I</span>
+            <div id="resumeManageNav" class="section-nav-menu">
+              <button id="resumeManageButton" class="section-nav-link" type="button" aria-haspopup="true" aria-expanded="false" data-primary-nav="resume">이력서 관리</button>
+              <div id="resumeManageMenu" class="section-nav-dropdown" role="menu" aria-label="이력서 관리 메뉴">
+                <button id="resumeCreateScreenButton" class="section-nav-dropdown-link" type="button" role="menuitem" data-screen="resume-create">이력서 생성</button>
+                <button id="resumeEditScreenButton" class="section-nav-dropdown-link" type="button" role="menuitem" data-screen="resume-edit">이력서 수정</button>
+                <button id="resumeReviewScreenButton" class="section-nav-dropdown-link" type="button" role="menuitem" data-screen="resume-review">이력서 리뷰</button>
+              </div>
+            </div>
           </nav>
         </div>
-        <div class="topbar-actions">
-          <span id="lastUpdatedLabel" class="last-updated">데이터 확인 중</span>
+        <div class="source-stack" aria-live="polite">
+          <span id="updatedAt">데이터 확인 중</span>
           <span id="modeBadge" class="mode-badge">불러오는 중</span>
-          <span id="displayName" class="profile-name"></span>
+          <div class="notification-shell">
+            <button id="notificationButton" class="icon-button notification-button" type="button" aria-label="알림" aria-expanded="false">
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="notificationBadge" class="notification-badge" hidden>0</span>
+            </button>
+            <section id="notificationDrawer" class="notification-drawer" aria-label="최근 알림" hidden>
+              <header><div><h2>알림</h2><span id="notificationUnreadPill">읽지 않음 0</span></div><button id="notificationDrawerCloseButton" type="button" aria-label="알림 닫기">×</button></header>
+              <nav id="notificationDrawerTabs" class="notification-tabs" aria-label="알림 유형"></nav>
+              <div id="notificationDrawerList" class="notification-list"></div>
+              <div class="drawer-actions"><button id="notificationMarkAllButton" type="button">모두 읽음</button><button id="notificationOpenAllButton" type="button">모든 알림 보기</button></div>
+            </section>
+          </div>
+          <button id="settingsButton" class="icon-button" type="button" aria-label="설정" title="설정">⚙</button>
           <button id="reloadButton" class="icon-button" type="button" aria-label="대시보드 새로고침" title="대시보드 새로고침">↻</button>
         </div>
       </header>
 
-      <div id="exampleBanner" class="example-banner" hidden>
-        <strong>예시 데이터 사용 중</strong>
-        <span>화면에 표시된 인물·회사·공고는 실제 정보가 아니며 예시 모드는 읽기 전용입니다. 개인 설정을 마치면 별도 DB로 전환됩니다.</span>
-      </div>
-
-      <div id="codespacesBanner" class="example-banner" hidden>
-        <strong>GitHub 임시 환경에서 실행 중</strong>
-        <span>이 공간은 GitHub 서버에 저장됩니다. 기능 확인에는 합성 문서를 사용하고, 실제 이력서·연락처·AI 계정은 개인 컴퓨터에서 등록해 주세요.</span>
-      </div>
+      <div id="environmentNotice" class="environment-notice" hidden></div>
+      <div id="actionNotice" class="action-notice" hidden></div>
 
       <main>
-        <section id="onboardingScreen" class="screen onboarding-screen" hidden>
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">PERSONAL SETUP</p>
-              <h2>내 구직 기준 만들기</h2>
-              <p class="subtle">이력서의 사실을 확인하고 직무·조건·플랫폼을 내 기준으로 설정합니다.</p>
-            </div>
-            <span id="onboardingProgress" class="count-pill">1 / 11</span>
-          </div>
-
-          <div class="onboarding-layout">
-            <ol id="onboardingSteps" class="onboarding-steps" aria-label="초기 설정 단계"></ol>
-            <form id="onboardingForm" class="card onboarding-card">
-              <section class="onboarding-panel" data-onboarding-step="1">
-                <p class="section-kicker">1. 저장 안내</p>
-                <h3 id="onboardingStorageTitle">개인 자료는 이 컴퓨터에만 저장됩니다</h3>
-                <p id="onboardingStorageDescription">등록한 문서, 분석 결과, 설정과 개인 DB는 Git에 포함되지 않는 로컬 비공개 영역에 저장됩니다.</p>
-                <label class="consent-row"><input id="onboardingPrivacy" type="checkbox"><span>저장 위치와 공개 제외 원칙을 확인했습니다.</span></label>
-              </section>
-
-              <section class="onboarding-panel" data-onboarding-step="2" hidden>
-                <p class="section-kicker">2. 문서 등록</p>
-                <h3>기준 이력서를 등록해 주세요</h3>
-                <p>PDF·DOCX 이력서는 필수이며 포트폴리오는 선택입니다. HWP는 PDF로 변환한 뒤 등록해 주세요.</p>
-                <div class="upload-grid">
-                  <div class="upload-card">
-                    <label><span>이력서 · 필수</span><input id="resumeDocumentInput" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>
-                    <strong id="resumeDocumentStatus">등록된 문서 없음</strong>
-                    <button id="resumeDocumentDelete" class="text-button" type="button" hidden>이력서 제거</button>
-                  </div>
-                  <div class="upload-card">
-                    <label><span>포트폴리오 · 선택</span><input id="portfolioDocumentInput" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>
-                    <strong id="portfolioDocumentStatus">등록된 문서 없음</strong>
-                    <button id="portfolioDocumentDelete" class="text-button" type="button" hidden>포트폴리오 제거</button>
-                  </div>
-                </div>
-              </section>
-
-              <section class="onboarding-panel" data-onboarding-step="3" hidden>
-                <p class="section-kicker">3. 문서 분석</p>
-                <h3>Codex·Claude Code로 문서 내용을 구조화합니다</h3>
-                <p>아래 로컬 요청 파일을 에이전트에게 읽어 달라고 요청하세요. 에이전트는 근거가 있는 사실만 분석해야 합니다.</p>
-                <div class="agent-request-box"><code id="agentRequestPath"></code><button id="copyAgentPrompt" class="secondary-button" type="button">요청문 복사</button></div>
-                <label>
-                  <span>구조화 분석 결과 직접 붙여넣기</span>
-                  <textarea id="analysisJson" rows="12" placeholder='{"facts":[],"evidence":[],"sections":[],"suggested":{}}'></textarea>
-                </label>
-                <button id="saveAnalysis" class="primary-button" type="button">분석 결과 불러오기</button>
-                <p id="analysisStatus" class="subtle"></p>
-              </section>
-
-              <section class="onboarding-panel" data-onboarding-step="4" hidden>
-                <p class="section-kicker">4. 분석 결과 확인</p>
-                <h3>사용할 내용만 남겨 주세요</h3>
-                <p>각 항목을 수정하거나 제외할 수 있습니다. 확인한 항목만 이력서 기준과 근거 목록에 반영됩니다.</p>
-                <div id="analysisReview" class="analysis-review"></div>
-              </section>
-
-              <section class="onboarding-panel" data-onboarding-step="5" hidden>
-                <p class="section-kicker">5. 목표 설정</p>
-                <h3>찾고 있는 일을 알려 주세요</h3>
-                <div class="form-grid">
-                  <label><span>화면에 표시할 이름</span><input id="setupDisplayName" maxlength="160" placeholder="별명도 가능합니다"></label>
-                  <label><span>주 목표 직무</span><input id="setupPrimaryRole" maxlength="160" placeholder="예: Backend Engineer"></label>
-                  <label><span>보조 직무</span><input id="setupSecondaryRoles" placeholder="쉼표로 구분"></label>
-                  <label><span>경력 단계</span><select id="setupCareerStage" required><option value="">선택해 주세요</option><option value="entry">신입</option><option value="experienced">경력</option><option value="career_change">직무전환</option><option value="returning">경력복귀</option></select></label>
-                  <label><span>총 경력 연수</span><input id="setupYearsExperience" type="number" min="0" max="80" step="0.5"></label>
-                  <label><span>국가</span><input id="setupCountry" maxlength="20"></label>
-                  <label><span>시간대</span><input id="setupTimezone" maxlength="80"></label>
-                  <label><span>통화</span><input id="setupCurrency" maxlength="20"></label>
-                </div>
-                <details class="advanced-settings">
-                  <summary>최종 PDF 연락처 · 선택 입력</summary>
-                  <p>값과 체크 여부는 로컬 <code>profile.yml</code>에만 저장됩니다. 체크한 항목만 최종 PDF에 표시됩니다.</p>
-                  <div class="form-grid">
-                    <label><span>이메일</span><input id="setupEmail" type="email" autocomplete="email"></label>
-                    <label><span>전화번호</span><input id="setupPhone" autocomplete="tel"></label>
-                    <label><span>주소</span><input id="setupAddress" autocomplete="street-address"></label>
-                  </div>
-                  <div class="checkbox-grid">
-                    <label><input id="setupIncludeEmail" type="checkbox"> 이메일을 PDF에 표시</label>
-                    <label><input id="setupIncludePhone" type="checkbox"> 전화번호를 PDF에 표시</label>
-                    <label><input id="setupIncludeAddress" type="checkbox"> 주소를 PDF에 표시</label>
-                  </div>
-                </details>
-                <label><span>선호하는 업무</span><textarea id="setupDesiredWork" rows="4" placeholder="한 줄에 하나씩 입력"></textarea></label>
-                <label><span>피하고 싶은 업무</span><textarea id="setupAvoidedWork" rows="4" placeholder="한 줄에 하나씩 입력"></textarea></label>
-              </section>
-
-              <section class="onboarding-panel" data-onboarding-step="6" hidden>
-                <p class="section-kicker">6. 지원 조건</p>
-                <h3>공고를 고를 조건을 설정합니다</h3>
-                <div class="form-grid">
-                  <label><span>희망 지역</span><input id="setupRegions" list="regionSuggestions" placeholder="검색 또는 직접 입력, 쉼표로 여러 지역 구분"><datalist id="regionSuggestions"><option value="Remote"><option value="Seoul"><option value="Busan"><option value="Daejeon"><option value="Daegu"><option value="Incheon"><option value="Gwangju"><option value="Ulsan"><option value="Jeju"></datalist></label>
-                  <label><span>고용 형태</span><input id="setupEmploymentTypes" placeholder="정규직, 계약직 등"></label>
-                  <label><span>근무 방식</span><input id="setupWorkModes" placeholder="출근, 재택, 하이브리드 등"></label>
-                  <label><span>지원 경력 최소</span><input id="setupExperienceMinimum" type="number" min="0" max="80" step="0.5"></label>
-                  <label><span>지원 경력 최대</span><input id="setupExperienceMaximum" type="number" min="0" max="80" step="0.5"></label>
-                  <label><span>희망 연봉 최소</span><input id="setupSalaryMinimum" type="number" min="0" step="100"></label>
-                  <label><span>희망 연봉 목표</span><input id="setupSalaryTarget" type="number" min="0" step="100"></label>
-                </div>
-                <div class="form-grid">
-                  <label><span>선호 회사</span><input id="setupPreferredCompanies" placeholder="쉼표로 구분"></label>
-                  <label><span>제외 회사</span><input id="setupExcludedCompanies" placeholder="쉼표로 구분"></label>
-                  <label><span>선호 산업</span><input id="setupPreferredIndustries" placeholder="쉼표로 구분"></label>
-                  <label><span>제외 산업</span><input id="setupExcludedIndustries" placeholder="쉼표로 구분"></label>
-                </div>
-              </section>
-
-              <section class="onboarding-panel" data-onboarding-step="7" hidden>
-                <p class="section-kicker">7. 검색 전략</p>
-                <h3>검색어와 공고 분류를 확인해 주세요</h3>
-                <label><span>포함 키워드</span><textarea id="setupIncludeKeywords" rows="4" placeholder="한 줄 또는 쉼표로 구분"></textarea></label>
-                <label><span>제외 키워드</span><textarea id="setupExcludeKeywords" rows="4" placeholder="한 줄 또는 쉼표로 구분"></textarea></label>
-                <label><span>공고 트랙</span><input id="setupTracks" placeholder="공고를 나눠 볼 기준을 쉼표로 구분"></label>
-                <button id="applyAnalysisSuggestions" class="secondary-button" type="button">문서 분석 제안 불러오기</button>
-              </section>
-
-              <section class="onboarding-panel" data-onboarding-step="8" hidden>
-                <p class="section-kicker">8. 플랫폼</p>
-                <h3>어디서 찾고 어떤 링크를 먼저 볼지 정합니다</h3>
-                <label class="consent-row"><input id="setupPreferDirect" type="checkbox"><span>활성 기업 공식 채용페이지를 우선합니다.</span></label>
-                <div id="onboardingSources" class="onboarding-sources"></div>
-              </section>
-
-              <section class="onboarding-panel" data-onboarding-step="9" hidden>
-                <p class="section-kicker">9. 이력서 권한</p>
-                <h3>공고별로 바꿀 수 있는 항목을 선택합니다</h3>
-                <p>학력·경력·자격과 확인된 근무 이력은 보호됩니다. 아래 내용 항목만 수정 허용 여부를 선택합니다.</p>
-                <div id="setupEditableSections" class="checkbox-grid"></div>
-                <div id="setupCustomSections" class="custom-section-list"></div>
-              </section>
-
-              <section class="onboarding-panel" data-onboarding-step="10" hidden>
-                <p class="section-kicker">10. 공고 평가 기준</p>
-                <h3>지원 판단에서 중요하게 볼 기준을 정합니다</h3>
-                <p>활성 기준의 가중치 합계가 100이어야 합니다. 점수는 직무나 특정 회사에 고정되지 않습니다.</p>
-                <div id="setupScoringDimensions" class="scoring-dimensions"></div>
-                <p id="scoringWeightTotal" class="subtle">평가 기준 사용 안 함</p>
-                <label><span>이 점수 미만이면 검토 필요</span><input id="setupReviewBelow" type="number" min="0" max="100"></label>
-                <details class="advanced-settings"><summary>맞춤 문서 품질 기준</summary>
-                  <p>직무와 무관한 공통 기준입니다. 활성 기준의 가중치 합계가 100이어야 합니다.</p>
-                  <div id="setupQualityCriteria" class="scoring-dimensions"></div>
-                  <p id="qualityCriteriaWeightTotal" class="subtle"></p>
-                  <div class="form-grid"><label><span>최소 작성 완성도</span><input id="setupMinimumScore" type="number" min="0" max="100"></label><label><span>PDF 최대 페이지</span><input id="setupMaximumPages" type="number" min="1" max="10"></label></div>
-                </details>
-              </section>
-
-              <section class="onboarding-panel" data-onboarding-step="11" hidden>
-                <p class="section-kicker">11. 최종 확인</p>
-                <h3>내 설정을 확인하고 시작합니다</h3>
-                <div id="onboardingPreview" class="onboarding-preview"></div>
-                <button id="completeOnboarding" class="primary-button" type="button">이 설정으로 개인 대시보드 시작</button>
-              </section>
-
-              <div class="onboarding-actions">
-                <button id="previousOnboardingStep" class="secondary-button" type="button">이전</button>
-                <button id="nextOnboardingStep" class="primary-button" type="button">저장하고 다음</button>
-              </div>
-            </form>
+        <section id="onboardingRedirectScreen" class="setup-screen" hidden>
+          <div class="setup-card">
+            <p class="section-kicker">PERSONAL SETUP</p>
+            <h1>개인 설정을 먼저 완료해 주세요</h1>
+            <p>문서와 구직 기준을 설정한 뒤 동일한 2축 대시보드로 시작합니다.</p>
+            <a class="primary-button" href="/">초기 설정 시작</a>
           </div>
         </section>
 
-        <section id="workflowScreen" class="screen">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">NEXT ACTIONS</p>
-              <h2>지금 할 일</h2>
-              <p class="subtle">저장된 지원 상태와 최신 작업본에서 다음 행동을 계산합니다. 별도 상태를 중복 저장하지 않습니다.</p>
+        <section id="jobBoardScreen" class="job-board" aria-label="공고 탐색">
+          <div class="board-toolbar">
+            <div id="quickTabs" class="quick-tabs" role="tablist" aria-label="공고 빠른 분류">
+              <button class="quick-tab active" type="button" data-quick="all"><span>전체 공고</span><strong id="tabCountAll">0</strong></button>
+              <span id="trackQuickTabs" class="track-quick-tabs"></span>
+              <button class="quick-tab" type="button" data-quick="favorite"><span>관심 공고</span><strong id="tabCountFavorite">0</strong></button>
+              <button class="quick-tab" type="button" data-quick="applied"><span>지원 완료</span><strong id="tabCountApplied">0</strong></button>
+              <button class="quick-tab" type="button" data-quick="skipped"><span>제외 목록</span><strong id="tabCountSkipped">0</strong></button>
             </div>
-            <span id="workflowCount" class="count-pill">0건</span>
-          </div>
-          <div class="workflow-summary" aria-label="작업 현황">
-            <article class="card workflow-stat"><span>공고 검토</span><strong id="workflowReviewCount">0</strong></article>
-            <article class="card workflow-stat"><span>보완 필요</span><strong id="workflowQualityCount">0</strong></article>
-            <article class="card workflow-stat"><span>승인 대기</span><strong id="workflowApprovalCount">0</strong></article>
-            <article class="card workflow-stat"><span>제출 준비</span><strong id="workflowSubmissionCount">0</strong></article>
-            <article class="card workflow-stat"><span>예정 후속조치</span><strong id="workflowFollowUpCount">0</strong></article>
-          </div>
-          <div id="workflowQueues" class="workflow-queues"></div>
-        </section>
-
-        <section id="inboxScreen" class="screen" hidden>
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">LOCAL INBOX</p>
-              <h2>지원 결과·후속조치 알림</h2>
-              <p class="subtle">이 컴퓨터의 대시보드 안에서만 표시되며 외부 메시지를 전송하지 않습니다.</p>
-            </div>
-            <span id="inboxCount" class="count-pill">0건</span>
-          </div>
-          <div id="inboxList" class="inbox-list"></div>
-        </section>
-
-        <section id="jobsScreen" class="screen" hidden>
-          <div id="jobQuickTabs" class="job-quick-tabs card" aria-label="빠른 공고 분류">
-            <button class="quick-tab active" type="button" data-quick-kind="all">전체 공고</button>
-            <button class="quick-tab" type="button" data-quick-kind="favorite">관심 공고</button>
-            <button class="quick-tab" type="button" data-quick-kind="applied">지원 완료</button>
-            <button class="quick-tab" type="button" data-quick-kind="skipped">제외 목록</button>
-            <span id="trackQuickTabs" class="track-quick-tabs"></span>
+            <button id="requestJobCollectionButton" class="secondary-button contextual-agent-button" type="button">공고 수집 요청</button>
           </div>
 
-          <div class="filters card">
-            <label class="filter-search">
-              <span>검색</span>
-              <input id="searchInput" type="search" placeholder="회사, 포지션, 키워드 검색">
-            </label>
-            <label>
-              <span>직무 트랙</span>
-              <select id="trackFilter"><option value="">전체</option></select>
-            </label>
-            <label>
-              <span>플랫폼</span>
-              <select id="platformFilter"><option value="">전체</option></select>
-            </label>
-            <label>
-              <span>지원 상태</span>
-              <select id="statusFilter">
-                <option value="">전체</option>
-                <option value="new">신규</option>
-                <option value="reviewing">검토 중</option>
-                <option value="skipped">제외</option>
-                <option value="applied">지원 완료</option>
-                <option value="interview">면접</option>
-                <option value="offer">제안</option>
-                <option value="rejected">종료</option>
-              </select>
-            </label>
-            <label>
-              <span>공고 보기</span>
-              <select id="lifecycleFilter">
-                <option value="active">활성 공고</option>
-                <option value="archive">보관함</option>
-                <option value="all">전체</option>
-              </select>
-            </label>
-            <label>
-              <span>마감</span>
-              <select id="deadlineFilter">
-                <option value="">전체</option>
-                <option value="urgent">7일 이내</option>
-                <option value="overdue">기한 지남</option>
-                <option value="none">마감일 없음</option>
-              </select>
-            </label>
-            <label>
-              <span>정렬</span>
-              <select id="jobSort">
-                <option value="score">점수 높은 순</option>
-                <option value="deadline">마감 임박 순</option>
-                <option value="recent">최근 확인 순</option>
-              </select>
-            </label>
-            <label class="favorite-filter">
-              <input id="favoriteFilter" type="checkbox">
-              <span>관심 공고만</span>
-            </label>
-            <button id="resetFiltersButton" class="secondary-button reset-filter-button" type="button">↻ 필터 초기화</button>
-            <details class="saved-filter-panel">
-              <summary>필터 저장</summary>
-              <div class="saved-filter-grid">
-                <label><span>저장 필터</span><select id="savedFilterSelect"><option value="">직접 설정</option></select></label>
-                <label><span>필터 이름</span><input id="savedFilterName" maxlength="80" placeholder="현재 조건 저장"></label>
-                <div class="saved-filter-actions">
-                  <label class="favorite-filter"><input id="savedFilterDefault" type="checkbox"><span>시작 필터</span></label>
-                  <button id="saveCurrentFilter" class="secondary-button" type="button">저장</button>
-                  <button id="deleteSavedFilter" class="text-button" type="button">삭제</button>
-                </div>
+          <form id="filterForm" class="filter-bar" aria-label="필터">
+            <label class="search-control"><span class="sr-only">검색</span><input id="searchInput" type="search" placeholder="회사, 포지션, 키워드 검색"><kbd>⌘K</kbd><b aria-hidden="true">⌕</b></label>
+            <label class="control"><span>직무 트랙</span><select id="trackFilter" aria-label="직무 트랙"><option value="">전체 직무 트랙</option></select></label>
+            <label class="control"><span>지역</span><select id="regionFilter" aria-label="지역"><option value="">전체 지역</option></select></label>
+            <label class="control"><span>점수</span><select id="scoreFilter" aria-label="점수"><option value="">전체 점수</option><option value="90">90 이상</option><option value="80">80 이상</option><option value="70">70 이상</option><option value="unset">평가 전</option></select></label>
+            <label class="control"><span>상태</span><select id="statusFilter" aria-label="지원 상태"><option value="">전체 상태</option><option value="new">신규</option><option value="reviewing">검토 중</option><option value="applied">지원 완료</option><option value="interview">면접</option><option value="offer">제안</option><option value="skipped">제외</option><option value="rejected">종료</option></select></label>
+            <button id="resetFiltersButton" class="ghost-button" type="button">↻ 필터 초기화</button>
+            <details id="advancedFilters" class="advanced-filters">
+              <summary>☷ 필터 더보기</summary>
+              <div class="advanced-grid">
+                <label class="control"><span>공고 보기</span><select id="lifecycleFilter"><option value="active">활성 공고</option><option value="archive">보관함</option><option value="all">전체</option></select></label>
+                <label class="control"><span>마감</span><select id="deadlineFilter"><option value="">전체</option><option value="urgent">7일 이내</option><option value="overdue">기한 지남</option><option value="none">마감일 없음</option></select></label>
+                <label class="control"><span>플랫폼</span><select id="platformFilter"><option value="">전체 플랫폼</option></select></label>
+                <label class="control"><span>근무·경력 조건</span><select id="conditionFilter"><option value="">전체 조건</option><option value="remote">원격 포함</option><option value="fulltime">정규직</option><option value="contract">계약직</option><option value="entry">신입·경력 무관</option><option value="experienced">경력직</option></select></label>
+                <div class="saved-filter-control"><label><span>저장 필터</span><select id="savedFilterSelect"><option value="">직접 설정</option></select></label><label><span>필터 이름</span><input id="savedFilterName" maxlength="80" placeholder="현재 조건 저장"></label><label class="checkbox-control"><input id="savedFilterDefault" type="checkbox"><span>시작 필터</span></label><button id="saveCurrentFilter" type="button">저장</button><button id="deleteSavedFilter" type="button">삭제</button></div>
               </div>
             </details>
-          </div>
+          </form>
 
-          <div id="jobStatusSummary" class="job-status-summary" aria-label="지원 작업 현황"></div>
+          <div id="stateSummary" class="state-summary" aria-label="현재 공고 요약"></div>
 
-          <div class="job-layout">
-            <section class="job-table-shell card">
-              <div class="job-table-titlebar">
-                <strong>공고 목록 <span id="jobCount">0건</span></strong>
-                <span class="subtle">공고를 선택하면 오른쪽에서 상세 내용과 다음 작업을 확인할 수 있습니다.</span>
+          <div class="workspace">
+            <section class="results" aria-label="공고 목록">
+              <div class="results-head"><h2 id="resultTitle">공고 목록 0개</h2><label class="sort-inline"><span>정렬:</span><select id="sortFilter"><option value="score">점수 높은 순</option><option value="deadline">마감 임박 순</option><option value="recent">최근 확인 순</option><option value="company">회사명 순</option></select></label></div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>점수</th><th>회사</th><th>포지션 / 역할</th><th>직무 트랙</th><th>조건</th><th>마감</th><th>맞춤문서</th><th>우선순위</th><th>리스크</th><th>플랫폼</th><th>상태</th><th>작업</th></tr></thead>
+                  <tbody id="jobRows"></tbody>
+                </table>
               </div>
-              <div class="job-table-head" aria-hidden="true">
-                <span>점수</span><span>회사</span><span>포지션</span><span>트랙</span><span>마감</span><span>플랫폼</span><span>상태</span><span>관심</span>
-              </div>
-              <div id="jobList" class="job-list" aria-live="polite"></div>
-              <div id="jobPagination" class="pagination-controls">
-                <button id="previousJobPage" class="secondary-button" type="button">이전</button>
-                <span id="jobPageStatus" class="subtle">1 / 1</span>
-                <button id="nextJobPage" class="secondary-button" type="button">다음</button>
-              </div>
+              <div id="paginationBar" class="pagination-bar" aria-label="페이지 탐색"><button id="pagePrevButton" type="button">‹</button><div id="pageButtons" class="page-buttons"></div><button id="pageNextButton" type="button">›</button><button id="pageLastButton" type="button">»</button><label><select id="pageSizeSelect" aria-label="페이지당 표시"><option value="20">20개씩 보기</option><option value="50">50개씩 보기</option><option value="100">100개씩 보기</option></select></label></div>
             </section>
-            <aside id="jobDetail" class="job-detail card">
-              <div class="empty-state">
-                <span>↗</span>
-                <h3>공고를 선택해 주세요</h3>
-                <p>대표 링크, 다른 출처와 지원 상태를 함께 확인할 수 있습니다.</p>
-              </div>
+
+            <aside id="jobDetail" class="detail" aria-label="선택 공고 및 지원 행동">
+              <button id="detailCloseButton" class="detail-close" type="button" aria-label="닫기">×</button>
+              <div id="detailScroll" class="detail-scroll"><div class="empty-state"><span>↗</span><h2>공고를 선택해 주세요</h2><p>대표 링크, 출처와 다음 작업을 함께 확인할 수 있습니다.</p></div></div>
+              <div id="detailFooter" class="detail-footer" hidden></div>
             </aside>
           </div>
         </section>
 
-        <section id="companionScreen" class="screen" hidden>
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">LOCAL COMPANION</p>
-              <h2>Codex·Claude 작업 요청</h2>
-              <p class="subtle">AI 계정이나 토큰은 저장하지 않습니다. 현재 로그인된 로컬 에이전트 세션이 owner-only 요청 파일을 처리합니다.</p>
-            </div>
-            <span id="companionTaskCount" class="count-pill">0건</span>
+        <nav id="resumeSubTabs" class="resume-subtabs" aria-label="이력서 관리 하위 메뉴" hidden>
+          <button id="resumeCreateSubTabButton" class="resume-subtab" type="button" data-screen="resume-create">이력서 생성</button>
+          <button id="resumeEditSubTabButton" class="resume-subtab" type="button" data-screen="resume-edit">이력서 수정</button>
+          <button id="resumeReviewSubTabButton" class="resume-subtab" type="button" data-screen="resume-review">이력서 리뷰</button>
+        </nav>
+
+        <section id="resumeCreateScreen" class="resume-management" aria-label="이력서 생성" hidden>
+          <div class="resume-management-head"><div><h1>이력서 생성</h1><p>맞춤공고와 맞춤이력서 생성을 위한 기준 자료를 등록합니다.</p></div><button id="requestDocumentAnalysisButton" class="resume-secondary-button" type="button">문서 분석 요청</button></div>
+          <div class="resume-v2-layout">
+            <form id="resumeBasicsForm" class="resume-v2-panel" aria-label="기본 정보 설정">
+              <div class="resume-v2-panel-head"><h2>기본 정보 설정</h2></div>
+              <div class="resume-v2-scroll">
+                <label class="resume-v2-field"><span>직군</span><input id="resumeJobFamily" maxlength="160" placeholder="직군 검색 또는 직접 입력"></label>
+                <label class="resume-v2-field"><span>직무</span><input id="resumeJobRole" maxlength="160" placeholder="직무 검색 또는 직접 입력"></label>
+                <div class="resume-v2-field"><span>경력 형태</span><div class="resume-segmented four" role="group" aria-label="경력 형태"><button type="button" data-career-type="new">신입</button><button type="button" data-career-type="experienced">경력</button><button type="button" data-career-type="career_change">직무전환</button><button type="button" data-career-type="returning">경력복귀</button></div></div>
+                <label class="resume-v2-field years-field"><span>경력(연차)</span><input id="resumeYearsExperience" type="number" min="0" max="80" step="0.5" placeholder="0"></label>
+                <div class="resume-v2-field"><span>보유 스킬</span><div id="resumeSkillChips" class="resume-chip-list"></div><div class="resume-chip-input-row"><input id="resumeSkillInput" type="text" placeholder="스킬 입력"><button id="resumeSkillAddButton" class="resume-v2-light-button" type="button">+ 추가</button></div><textarea id="resumeSkills" aria-hidden="true" tabindex="-1" hidden></textarea></div>
+                <label class="resume-v2-field"><span>학교</span><input id="resumeSchool" maxlength="240" placeholder="학교 검색 또는 직접 입력"></label>
+                <label class="resume-v2-field"><span>전공</span><input id="resumeMajor" maxlength="240" placeholder="전공 검색 또는 직접 입력"></label>
+                <div class="resume-v2-field"><span>보유 자격</span><div id="resumeCertificateChips" class="resume-chip-list"></div><div class="resume-chip-input-row"><input id="resumeCertificateInput" type="text" placeholder="자격 입력"><button id="resumeCertificateAddButton" class="resume-v2-light-button" type="button">+ 추가</button></div><textarea id="resumeCertificates" aria-hidden="true" tabindex="-1" hidden></textarea></div>
+                <input id="resumeHeadline" type="hidden"><textarea id="resumeSummary" aria-hidden="true" tabindex="-1" hidden></textarea>
+              </div>
+              <div class="resume-v2-panel-foot"><span id="resumeBasicsStatus">저장 대기</span><button class="resume-v2-primary-button" type="submit">기본 정보 저장</button></div>
+            </form>
+
+            <section class="resume-v2-panel" aria-label="경력과 프로젝트">
+              <div class="resume-v2-panel-head"><div><h2>경력과 프로젝트</h2><p>한 항목에 역할, 기간, 담당 업무와 대표 프로젝트를 함께 등록합니다.</p></div></div>
+              <button class="resume-v2-add-button" type="button" data-add-item="experience">+ 경력 추가</button>
+              <div id="structuredItemList" class="resume-experience-list resume-v2-scroll"></div>
+              <div class="resume-v2-panel-foot compact"><span>프로젝트·학력·기술·자격은 추가 창에서 유형을 선택합니다.</span><button id="customSectionAddButton" class="resume-v2-light-button" type="button">커스텀 섹션</button></div>
+              <div id="customSectionList" class="resume-custom-section-list"></div>
+            </section>
+
+            <section class="resume-v2-panel" aria-label="기준 파일과 준비도">
+              <div class="resume-v2-panel-head"><div><h2>기준 파일</h2><p>기준 이력서는 필수이며 포트폴리오는 선택입니다.</p></div></div>
+              <div class="resume-v2-scroll">
+                <button id="resumeImportCurrentButton" class="resume-v2-outline-button resume-import-button" type="button">현재 적용 기준 불러오기</button>
+                <form id="resumeUploadForm" class="resume-inline-upload"><select id="resumeDocumentReplace" class="sr-only" aria-label="교체할 이력서"><option value="">새 이력서로 추가</option></select><input id="resumeDocumentFile" class="resume-file-input" type="file" accept=".pdf,.docx" required><div id="resumeDocumentList"></div></form>
+                <form id="portfolioUploadForm" class="resume-inline-upload"><select id="portfolioDocumentReplace" class="sr-only" aria-label="교체할 포트폴리오"><option value="">새 포트폴리오로 추가</option></select><input id="portfolioDocumentFile" class="resume-file-input" type="file" accept=".pdf,.docx" required><div id="portfolioDocumentList"></div></form>
+                <section id="resumeReadiness" class="resume-readiness-card" aria-label="맞춤이력서 준비도"></section>
+                <button id="supplementOpenButton" class="resume-v2-outline-button" type="button">보강 질문 확인</button>
+              </div>
+            </section>
           </div>
-          <div class="card companion-create">
-            <div>
-              <strong>새 로컬 작업</strong>
-              <p>동일한 활성 요청은 하나로 합치고, 문서 생성은 한 번에 하나만 실행합니다.</p>
-            </div>
-            <div class="companion-create-actions">
-              <button id="queueJobCollection" class="secondary-button" type="button">공고 수집 요청</button>
-              <button id="queueDocumentAnalysis" class="secondary-button" type="button">등록 문서 분석 요청</button>
-            </div>
-          </div>
-          <div id="companionTaskList" class="companion-task-list"></div>
+          <aside class="resume-create-info-bar"><span aria-hidden="true">i</span><p>등록한 정보와 파일은 맞춤공고 추천과 맞춤이력서 문안 생성의 기준 자료로 활용됩니다.</p></aside>
         </section>
 
-        <section id="resumeScreen" class="screen" hidden>
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">RESUME BASELINE</p>
-              <h2>이력서 작성 기준</h2>
-              <p class="subtle">현재 공고별 문서에 적용되는 기본 이력서는 1개입니다.</p>
-            </div>
-            <span id="resumeSavedAt" class="subtle"></span>
+        <section id="resumeEditScreen" class="resume-management resume-edit-management" aria-label="이력서 수정" hidden>
+          <div class="resume-management-head"><div><h1>이력서 수정</h1><p>등록된 기준 이력서와 포트폴리오를 교체하거나 관리합니다.</p></div><div class="resume-management-tools"><button id="resumeImportEditButton" class="resume-secondary-button" type="button">현재 기준 불러오기</button><button id="resumeEditRefreshButton" class="resume-secondary-button" type="button">↻ 새로고침</button><button id="resumeEditGuideButton" class="resume-secondary-button" type="button" aria-expanded="false" aria-controls="resumeEditGuidePanel">? 이력서 관리 가이드</button></div></div>
+          <div id="resumeEditGuidePanel" class="resume-edit-guide" hidden><strong>이력서 관리 기준</strong><span>파일 첨부본은 파일 교체로 관리하고, 사이트 작성 이력서는 섹션별로 수정합니다.</span></div>
+          <div class="resume-edit-grid">
+            <section class="resume-management-card resume-edit-card" aria-label="등록된 이력서"><div class="resume-card-head"><h2>등록된 이력서 <span class="resume-info-dot" aria-hidden="true">i</span></h2></div><p class="resume-edit-note">복수 기준을 등록하고 주 기준·보조 기준 상태로 관리합니다.</p><div id="editResumeDocumentList" class="resume-edit-file-list"></div></section>
+            <form id="resumeEditForm" class="resume-management-card resume-edit-card" aria-label="사이트 작성 이력서"><div class="resume-card-head"><h2>사이트 작성 이력서 <span class="resume-info-dot" aria-hidden="true">i</span></h2><span>수정 가능</span></div><div class="resume-edit-section-list"><button type="button" class="resume-edit-section-row" data-resume-edit-section="profile"><span><strong>기본 프로필</strong><small>한 줄 소개와 기본 표현</small></span><b>›</b></button><button type="button" class="resume-edit-section-row" data-resume-edit-section="career"><span><strong>경력 요약</strong><small>주요 경력 요약 및 강점</small></span><b>›</b></button><button type="button" class="resume-edit-section-row" data-resume-edit-section="strengths"><span><strong>핵심역량</strong><small>전문 기술 및 역량</small></span><b>›</b></button><button type="button" class="resume-edit-section-row" data-resume-edit-section="evidence"><span><strong>대표 경험과 근거</strong><small>대표 경험과 확인된 성과</small></span><b>›</b></button></div><div id="resumeEditTextPanel" class="resume-edit-text-panel" hidden><div><span id="resumeEditTextBadge">기본 프로필</span><h3 id="resumeEditTextTitle">기본 프로필 수정</h3><p>사이트 작성 이력서의 기준 문안을 섹션별로 수정합니다.</p></div><label class="resume-edit-field" data-resume-edit-panel="profile"><span>한 줄 소개</span><input id="editHeadline" maxlength="300"></label><label class="resume-edit-field" data-resume-edit-panel="career" hidden><span>경력 요약</span><textarea id="editSummary" rows="6" maxlength="5000"></textarea></label><label class="resume-edit-field" data-resume-edit-panel="strengths" hidden><span>기술·역량 · 한 줄에 하나</span><textarea id="editSkills" rows="6"></textarea></label><div class="resume-edit-field-group" data-resume-edit-panel="evidence" hidden><label class="resume-edit-field"><span>대표 경험</span><textarea id="editRepresentativeExperience" rows="4"></textarea></label><label class="resume-edit-field"><span>확인된 성과 근거</span><textarea id="editAchievementEvidence" rows="4"></textarea></label></div><div class="resume-edit-panel-actions"><button id="resumeEditCancelButton" class="resume-text-button" type="button">닫기</button><button class="resume-primary-button" type="submit">수정 내용 저장</button></div></div><button id="resumeEditStartButton" class="resume-primary-button resume-edit-full-button" type="button">텍스트 수정</button><section class="edit-structured-section"><header><h3>구조화된 경력·프로젝트</h3><button id="editStructuredInCreateButton" type="button">항목 관리</button></header><div id="editStructuredSummary" class="edit-structured-summary"></div></section></form>
+            <section class="resume-management-card resume-edit-card" aria-label="등록된 포트폴리오"><div class="resume-card-head"><h2>등록된 포트폴리오 <span class="resume-info-dot" aria-hidden="true">i</span></h2><span id="portfolioEditCount">0개 등록됨</span></div><div id="editPortfolioDocumentList"></div><p class="resume-edit-note">포트폴리오는 선택 자료이며 등록한 경우에만 맞춤문서 기준에 활용됩니다.</p></section>
+            <section class="resume-management-card resume-edit-criteria-card" aria-label="현재 적용 기준"><div class="resume-card-head"><h2>현재 적용 기준 <span class="resume-info-dot" aria-hidden="true">i</span></h2><button id="openSettingsFromResume" class="resume-secondary-button" type="button">개인 설정 열기</button></div><div id="appliedCriteria" class="resume-criteria-table"></div></section>
           </div>
-          <div id="resumeReadiness" class="card resume-readiness"></div>
-          <section class="card resume-assets-panel">
-            <div class="panel-title-row">
-              <div><strong>이력서·포트폴리오 자산</strong><p class="subtle">초기 등록 문서의 사용 상태를 관리합니다.</p></div>
-            </div>
-            <form id="personalDocumentForm" class="document-manager">
-              <label><span>문서 종류</span><select id="personalDocumentKind"><option value="resume">이력서</option><option value="portfolio">포트폴리오</option></select></label>
-              <label><span>추가 또는 교체</span><select id="personalDocumentReplace"><option value="">새 문서로 추가</option></select></label>
-              <label><span>PDF 또는 DOCX</span><input id="personalDocumentFile" type="file" accept=".pdf,.docx" required></label>
-              <button class="secondary-button" type="submit">문서 등록</button>
-            </form>
-            <div id="resumeAssets" class="resume-assets"></div>
-            <button id="reanalyzeDocuments" class="secondary-button" type="button">선택 문서 다시 분석</button>
-          </section>
-          <form id="resumeForm" class="resume-form card">
-            <div class="form-grid">
-              <label>
-                <span>직무 분야</span>
-                <input id="resumeJobFamily" maxlength="160" placeholder="예: Engineering, Design, Operations">
-              </label>
-              <label>
-                <span>목표 직무</span>
-                <input id="resumeJobRole" maxlength="160" placeholder="예: Backend Engineer">
-              </label>
-              <label>
-                <span>경력 구분</span>
-                <select id="resumeCareerType">
-                  <option value="new">신입</option>
-                  <option value="experienced">경력</option>
-                </select>
-              </label>
-              <label>
-                <span>경력 단계</span>
-                <select id="resumeCareerStage">
-                  <option value="entry">신입</option>
-                  <option value="experienced">경력</option>
-                  <option value="career_change">직무전환</option>
-                  <option value="returning">경력복귀</option>
-                </select>
-              </label>
-              <label>
-                <span>총 경력 연수</span>
-                <input id="resumeYearsExperience" type="number" min="0" max="80" step="0.5" placeholder="경력 선택 시 입력">
-              </label>
-              <label>
-                <span>학교</span>
-                <input id="resumeSchool" maxlength="240" placeholder="선택 입력">
-              </label>
-              <label>
-                <span>전공</span>
-                <input id="resumeMajor" maxlength="240" placeholder="선택 입력">
-              </label>
-            </div>
-            <label>
-              <span>헤드라인</span>
-              <input id="resumeHeadline" maxlength="300" placeholder="목표 직무에 맞는 한 줄 소개">
-            </label>
-            <label>
-              <span>요약</span>
-              <textarea id="resumeSummary" rows="7" maxlength="5000" placeholder="경력 요약과 강점을 사실 중심으로 작성"></textarea>
-            </label>
-            <div class="form-grid">
-              <label>
-                <span>핵심 기술·역량</span>
-                <textarea id="resumeSkills" rows="7" placeholder="한 줄에 하나씩 입력"></textarea>
-              </label>
-              <label>
-                <span>경력 하이라이트</span>
-                <textarea id="resumeHighlights" rows="7" placeholder="한 줄에 하나씩 입력"></textarea>
-              </label>
-              <label>
-                <span>자격·인증</span>
-                <textarea id="resumeCertificates" rows="5" placeholder="한 줄에 하나씩 입력"></textarea>
-              </label>
-              <label>
-                <span>성과 근거</span>
-                <textarea id="resumeAchievementEvidence" rows="5" maxlength="6000" placeholder="확인 가능한 결과와 근거"></textarea>
-              </label>
-              <label>
-                <span>대표 경험</span>
-                <textarea id="resumeRepresentativeExperience" rows="5" maxlength="6000" placeholder="직무와 연결되는 대표 경험"></textarea>
-              </label>
-              <label>
-                <span>직접 담당 범위</span>
-                <textarea id="resumeDirectScope" rows="5" maxlength="6000" placeholder="본인이 직접 수행한 범위"></textarea>
-              </label>
-              <label>
-                <span>협업 범위</span>
-                <textarea id="resumeCollaborationScope" rows="5" maxlength="6000" placeholder="협업한 조직과 역할"></textarea>
-              </label>
-              <label>
-                <span>직무 관점 / 일하는 방식</span>
-                <textarea id="resumeCareerDirection" rows="5" maxlength="6000" placeholder="문제를 바라보고 일하는 방식"></textarea>
-              </label>
-            </div>
-            <fieldset class="editable-sections">
-              <legend>공고별 수정 허용 항목</legend>
-              <p>체크한 항목만 공고별 지원 문서 작업본에서 수정할 수 있습니다. 학력·경력 구분·자격 정보는 사실 보호 항목으로 잠깁니다.</p>
-              <div class="checkbox-grid">
-                <label><input type="checkbox" data-editable-section="headline"> 헤드라인</label>
-                <label><input type="checkbox" data-editable-section="summary"> 경력 요약</label>
-                <label><input type="checkbox" data-editable-section="skills"> 핵심 기술·역량</label>
-                <label><input type="checkbox" data-editable-section="experience_highlights"> 경력 하이라이트</label>
-                <label><input type="checkbox" data-editable-section="achievement_evidence"> 성과 근거</label>
-                <label><input type="checkbox" data-editable-section="representative_experience"> 대표 경험</label>
-                <label><input type="checkbox" data-editable-section="direct_scope"> 직접 담당 범위</label>
-                <label><input type="checkbox" data-editable-section="collaboration_scope"> 협업 범위</label>
-                <label><input type="checkbox" data-editable-section="career_direction"> 직무 관점 / 일하는 방식</label>
-              </div>
-            </fieldset>
-            <fieldset class="editable-sections">
-              <legend>구조화 경력·학력·기술·자격·프로젝트</legend>
-              <p>직무와 무관한 고정 양식이 아니라 사용자가 실제로 입력한 항목만 최종 문서에 포함됩니다.</p>
-              <div class="structured-add-actions">
-                <button class="text-button" type="button" data-add-structured="experience">경력 추가</button>
-                <button class="text-button" type="button" data-add-structured="education">학력 추가</button>
-                <button class="text-button" type="button" data-add-structured="skill">기술 추가</button>
-                <button class="text-button" type="button" data-add-structured="certification">자격 추가</button>
-                <button class="text-button" type="button" data-add-structured="project">프로젝트 추가</button>
-              </div>
-              <div id="resumeStructuredItems" class="structured-item-list"></div>
-            </fieldset>
-            <fieldset class="editable-sections">
-              <legend>첨부 문서에서 가져온 추가 항목</legend>
-              <p>기존 9개 항목과 겹치지 않는 섹션만 표시됩니다.</p>
-              <div id="resumeCustomSections" class="custom-section-list"></div>
-            </fieldset>
-            <fieldset class="editable-sections">
-              <legend>확인된 근거 목록</legend>
-              <p>문서에서 확인하고 승인한 사실과 성과 근거입니다.</p>
-              <div id="resumeEvidenceItems" class="evidence-list"></div>
-            </fieldset>
-            <div class="form-actions">
-              <p>근거가 없는 수치나 경력은 자동으로 추가하지 않습니다.</p>
-              <button class="primary-button" type="submit">이력서 기준 저장</button>
-            </div>
-          </form>
         </section>
 
-        <section id="settingsScreen" class="screen" hidden>
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">LOCAL SETUP</p>
-              <h2>개인 설정 준비</h2>
-            </div>
-          </div>
-          <div class="settings-grid">
-            <form id="personalSettingsForm" class="card settings-card full">
-              <h3>언제든 수정할 수 있는 개인 기준</h3>
-              <p class="subtle">변경 후 새로 만드는 공고 수집·분석·맞춤 문서 작업부터 적용됩니다.</p>
-              <div class="form-grid">
-                <label><span>화면 표시 이름</span><input id="settingsDisplayName" maxlength="160"></label>
-                <label><span>시간대</span><input id="settingsTimezone" maxlength="80" placeholder="Asia/Seoul"></label>
-                <label><span>목표 직무(줄바꿈 구분)</span><textarea id="settingsTargetRoles" rows="3"></textarea></label>
-                <label><span>사용자 정의 트랙(줄바꿈 구분)</span><textarea id="settingsTracks" rows="3"></textarea></label>
-                <label><span>희망 지역(줄바꿈 구분)</span><textarea id="settingsRegions" rows="3"></textarea></label>
-                <label><span>포함 키워드(줄바꿈 구분)</span><textarea id="settingsIncludeKeywords" rows="3"></textarea></label>
-                <label><span>제외 키워드(줄바꿈 구분)</span><textarea id="settingsExcludeKeywords" rows="3"></textarea></label>
-                <label><span>희망 업무(줄바꿈 구분)</span><textarea id="settingsDesiredWork" rows="3"></textarea></label>
-                <label><span>기피 업무(줄바꿈 구분)</span><textarea id="settingsAvoidedWork" rows="3"></textarea></label>
-              </div>
-              <section class="nested-settings">
-                <h4>맞춤 문서 품질 기준</h4>
-                <p class="subtle">활성 기준의 가중치 합계가 100이어야 하며, 다음 문서 생성부터 반영됩니다.</p>
-                <div id="settingsQualityCriteria" class="scoring-dimensions"></div>
-                <p id="settingsQualityCriteriaTotal" class="subtle"></p>
-                <div class="form-grid">
-                  <label><span>최소 작성 완성도</span><input id="settingsMinimumScore" type="number" min="0" max="100"></label>
-                  <label><span>PDF 최대 페이지</span><input id="settingsMaximumPages" type="number" min="1" max="10"></label>
-                </div>
-              </section>
-              <button class="primary-button" type="submit">개인 설정 저장</button>
-            </form>
-            <article class="card settings-card">
-              <h3>설정 파일</h3>
-              <div id="configChecklist" class="checklist"></div>
-            </article>
-            <article class="card settings-card">
-              <h3>시작 순서</h3>
-              <ol>
-                <li><code>npm run onboarding</code>으로 화면 설정을 시작합니다.</li>
-                <li>고급 사용자는 <code>npm run setup</code>으로 설정 파일을 직접 만들 수 있습니다.</li>
-                <li>완료 후에는 <code>npm run personal</code>로 개인 화면을 엽니다.</li>
-              </ol>
-              <p>로컬 설정과 DB는 Git에 포함되지 않습니다.</p>
-            </article>
-            <article class="card settings-card full">
-              <h3>공고 평가 기준</h3>
-              <div id="scoringSettings" class="source-settings"></div>
-            </article>
-            <article class="card settings-card full">
-              <h3>플랫폼 사용 기준</h3>
-              <div id="sourceSettings" class="source-settings"></div>
-            </article>
+        <section id="resumeReviewScreen" class="resume-review" aria-label="이력서 리뷰" hidden>
+          <div class="resume-management-head"><div><h1>이력서 리뷰</h1><p>공고별 작업본을 검토하고 승인·수기 제출·지원 결과를 기록합니다.</p></div><span id="reviewCount" class="count-pill">0건</span></div>
+          <div id="reviewStageTabs" class="review-stage-tabs" role="tablist"></div>
+          <div class="review-workspace">
+            <aside class="review-list-panel"><div id="reviewFilters" class="review-filters"></div><div id="reviewJobList" class="review-job-list"></div></aside>
+            <section id="reviewDetail" class="review-detail"><div class="empty-state"><h2>수정안을 선택하세요</h2><p>왼쪽 목록에서 공고별 맞춤문서를 선택해 주세요.</p></div></section>
+            <aside id="reviewRulePanel" class="review-rule-panel"><section><h3>승인 가능 기준</h3><ul><li>사용자가 설정한 작성 완성도 기준 통과</li><li>근거 없는 내용과 사실 충돌 없음</li><li>최신 기준 이력서와 공고 체크섬 일치</li><li>승인 후에만 PDF 준비</li></ul></section><section><h3>보완</h3><p>문안 수정이 필요한 작업본은 보완 상태로 돌립니다.</p></section><section><h3>보류</h3><p>지원 판단을 미룰 공고는 보류 상태로 남깁니다.</p></section></aside>
           </div>
         </section>
       </main>
     </div>
 
+    <div id="settingsModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="settingsModal"></div><section class="modal-dialog wide" role="dialog" aria-modal="true" aria-labelledby="settingsTitle"><header><div><h2 id="settingsTitle">개인 설정</h2><p>직무·지역·키워드·트랙과 작성 기준을 수정합니다.</p></div><button type="button" data-close-modal="settingsModal" aria-label="닫기">×</button></header><form id="settingsForm" class="settings-form"><label><span>화면 표시 이름</span><input id="settingsDisplayName" maxlength="160"></label><label><span>목표 직무 · 한 줄에 하나</span><textarea id="settingsTargetRoles" rows="3"></textarea></label><label><span>사용자 정의 트랙 · 한 줄에 하나</span><textarea id="settingsTracks" rows="3"></textarea></label><label><span>희망 지역 · 한 줄에 하나</span><textarea id="settingsRegions" rows="3"></textarea></label><label><span>포함 키워드</span><textarea id="settingsIncludeKeywords" rows="3"></textarea></label><label><span>제외 키워드</span><textarea id="settingsExcludeKeywords" rows="3"></textarea></label><label><span>맞춤문서 최소 품질 점수</span><input id="settingsMinimumScore" type="number" min="0" max="100"></label><label><span>PDF 최대 페이지</span><input id="settingsMaximumPages" type="number" min="1" max="10"></label><div id="scoringProfileSummary" class="settings-wide"></div><div id="sourceSettings" class="settings-wide"></div><footer class="settings-wide"><button type="button" data-close-modal="settingsModal">취소</button><button class="primary-button" type="submit">개인 설정 저장</button></footer></form></section></div>
+
+    <div id="notificationModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="notificationModal"></div><section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="notificationModalTitle"><header><div><h2 id="notificationModalTitle">전체 알림</h2><p>공고·문서·제출 상태를 한곳에서 확인합니다.</p></div><button type="button" data-close-modal="notificationModal">×</button></header><div class="modal-controls"><input id="notificationSearchInput" type="search" placeholder="알림 검색"><button id="notificationModalMarkAllButton" type="button">모두 읽음</button></div><div id="notificationFullList" class="notification-full-list"></div></section></div>
+
+    <div id="structuredItemModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="structuredItemModal"></div><section class="modal-dialog wide" role="dialog" aria-modal="true" aria-labelledby="structuredItemTitle"><header><h2 id="structuredItemTitle">항목 추가</h2><button type="button" data-close-modal="structuredItemModal">×</button></header><form id="structuredItemForm" class="modal-form structured-item-form"><input id="structuredItemId" type="hidden"><label><span>항목 유형</span><select id="structuredItemKind"><option value="experience">경력</option><option value="project">프로젝트</option><option value="education">학력</option><option value="skill">기술</option><option value="certification">자격</option><option value="award">수상</option><option value="research">연구</option><option value="publication">논문</option><option value="training">교육</option><option value="volunteer">봉사</option></select></label><label class="structured-wide"><span>항목 제목</span><input id="structuredItemLabel" required maxlength="240" placeholder="예: 서비스 개선 프로젝트"></label><label><span>회사·기관·학교</span><input id="structuredItemOrganization" maxlength="300"></label><label><span>직무·역할</span><input id="structuredItemRole" maxlength="300"></label><label><span>시작</span><input id="structuredItemStartDate" maxlength="7" placeholder="YYYY-MM"></label><label><span>종료</span><input id="structuredItemEndDate" maxlength="7" placeholder="YYYY-MM 또는 present"></label><label><span>고용·참여 형태</span><input id="structuredItemEngagement" maxlength="200" placeholder="정규직, 계약직, 개인 프로젝트 등"></label><label><span>지역·근무 방식</span><input id="structuredItemLocation" maxlength="200"></label><label class="structured-wide"><span>업무·프로젝트 요약</span><textarea id="structuredItemSummary" rows="4" maxlength="6000"></textarea></label><label class="structured-wide"><span>성과·주요 내용 · 한 줄에 하나</span><textarea id="structuredItemHighlights" rows="5" maxlength="6000"></textarea></label><label class="structured-wide"><span>사용 기술·도구 · 한 줄에 하나</span><textarea id="structuredItemSkills" rows="3" maxlength="3000"></textarea></label><label class="structured-wide"><span>연결된 포트폴리오·근거 링크 · 한 줄에 하나</span><textarea id="structuredItemLinks" rows="3" maxlength="3000" placeholder="https:// 또는 등록 문서의 위치 메모"></textarea></label><footer class="structured-wide"><button type="button" data-close-modal="structuredItemModal">취소</button><button class="primary-button" type="submit">저장</button></footer></form></section></div>
+
+    <div id="customSectionModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="customSectionModal"></div><section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="customSectionTitle"><header><h2 id="customSectionTitle">커스텀 섹션</h2><button type="button" data-close-modal="customSectionModal">×</button></header><form id="customSectionForm" class="modal-form"><input id="customSectionId" type="hidden"><label><span>섹션 이름</span><input id="customSectionLabel" required maxlength="200" placeholder="연구, 수상, 봉사 등"></label><label><span>내용 형식</span><select id="customSectionKind"><option value="text">문단</option><option value="list">목록</option></select></label><label><span>내용</span><textarea id="customSectionValue" rows="8" maxlength="8000"></textarea></label><label class="checkbox-control"><input id="customSectionEditable" type="checkbox" checked><span>공고별 맞춤문서에서 수정 허용</span></label><footer><button type="button" data-close-modal="customSectionModal">취소</button><button class="primary-button" type="submit">저장</button></footer></form></section></div>
+
+    <div id="supplementModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="supplementModal"></div><section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="supplementTitle"><header><h2 id="supplementTitle">보강 질문</h2><button type="button" data-close-modal="supplementModal">×</button></header><form id="supplementForm" class="modal-form"><label><span>확인된 성과 근거</span><textarea id="supplementAchievement" rows="4"></textarea></label><label><span>대표 경험</span><textarea id="supplementExperience" rows="4"></textarea></label><label><span>직접 담당 범위</span><textarea id="supplementDirectScope" rows="3"></textarea></label><label><span>협업 범위</span><textarea id="supplementCollaboration" rows="3"></textarea></label><footer><button type="button" data-close-modal="supplementModal">나중에 작성</button><button class="primary-button" type="submit">답변 저장</button></footer></form></section></div>
+
+    <div id="packageEditModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="packageEditModal"></div><section class="modal-dialog wide" role="dialog" aria-modal="true" aria-labelledby="packageEditTitle"><header><div><h2 id="packageEditTitle">맞춤문서 직접 수정</h2><p>첨부 이력서에서 승인된 항목 중 이 공고에서 수정이 허용된 항목만 표시합니다.</p></div><button type="button" data-close-modal="packageEditModal">×</button></header><form id="packageEditForm" class="modal-form"><div id="packageEditFields" class="package-edit-fields"></div><footer><button type="button" data-close-modal="packageEditModal">취소</button><button class="primary-button" type="submit">수정 내용 저장</button></footer></form></section></div>
+
+    <div id="comparisonModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="comparisonModal"></div><section class="modal-dialog extra-wide" role="dialog" aria-modal="true" aria-labelledby="comparisonTitle"><header><div><h2 id="comparisonTitle">수정 전 / 수정 후 비교</h2><p>기준 이력서와 공고별 작업본을 비교합니다.</p></div><button type="button" data-close-modal="comparisonModal">×</button></header><div id="comparisonContent" class="comparison-grid"></div></section></div>
+
+    <div id="confirmationModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="confirmationModal"></div><section class="modal-dialog compact" role="dialog" aria-modal="true" aria-labelledby="confirmationTitle"><header><h2 id="confirmationTitle">작업을 확인해 주세요</h2><button type="button" data-close-modal="confirmationModal">×</button></header><p id="confirmationDescription"></p><label id="confirmationCheckRow" class="confirmation-check" hidden><input id="confirmationCheck" type="checkbox"><span id="confirmationCheckLabel">외부 채용 플랫폼에서 실제 작업을 완료했습니다.</span></label><footer><button id="confirmationCancelButton" type="button">취소</button><button id="confirmationConfirmButton" class="primary-button" type="button">확인</button></footer></section></div>
+
+    <div id="outcomeModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="outcomeModal"></div><section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="outcomeTitle"><header><div><h2 id="outcomeTitle">지원 결과 기록</h2><p>기존 기록을 지우지 않고 결과와 교정을 남깁니다.</p></div><button type="button" data-close-modal="outcomeModal">×</button></header><form id="outcomeForm" class="modal-form"><label><span>결과</span><select id="outcomeType"></select></label><label><span>통보 일시</span><input id="outcomeOccurredAt" type="datetime-local"></label><label><span>확인 경로</span><select id="outcomeChannel"><option value="email">이메일</option><option value="platform">채용 플랫폼</option><option value="phone">전화</option><option value="message">문자·메신저</option><option value="other">기타</option></select></label><label><span>증빙 · 선택</span><input id="outcomeEvidence" type="file" accept=".pdf,.png,.jpg,.jpeg"></label><label><span>메모</span><textarea id="outcomeNote" rows="4" maxlength="3000"></textarea></label><footer><button type="button" data-close-modal="outcomeModal">취소</button><button class="primary-button" type="submit">결과 저장</button></footer></form></section></div>
+
+    <div id="outcomeCorrectionModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="outcomeCorrectionModal"></div><section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="outcomeCorrectionTitle"><header><div><h2 id="outcomeCorrectionTitle">지원 결과 바로잡기</h2><p>기존 기록은 보존하고 연결된 교정 기록을 새로 추가합니다.</p></div><button type="button" data-close-modal="outcomeCorrectionModal">×</button></header><form id="outcomeCorrectionForm" class="modal-form"><label><span>정정 결과</span><select id="outcomeCorrectionType"></select></label><label><span>확인 일시</span><input id="outcomeCorrectionOccurredAt" type="datetime-local" required></label><label><span>정정 이유</span><textarea id="outcomeCorrectionReason" rows="3" maxlength="1000" required></textarea></label><label><span>정정 메모</span><textarea id="outcomeCorrectionSummary" rows="4" maxlength="2000"></textarea></label><footer><button type="button" data-close-modal="outcomeCorrectionModal">취소</button><button class="primary-button" type="submit">교정 기록 추가</button></footer></form></section></div>
+
+    <div id="followUpModal" class="modal" hidden><div class="modal-backdrop" data-close-modal="followUpModal"></div><section class="modal-dialog compact" role="dialog" aria-modal="true" aria-labelledby="followUpTitle"><header><div><h2 id="followUpTitle">후속조치 추가</h2><p>연락·면접·결과 확인 일정을 로컬 알림에 등록합니다.</p></div><button type="button" data-close-modal="followUpModal">×</button></header><form id="followUpForm" class="modal-form"><label><span>할 일</span><input id="followUpName" maxlength="200" required placeholder="예: 결과 확인"></label><label><span>예정일</span><input id="followUpDueAt" type="date" required></label><footer><button type="button" data-close-modal="followUpModal">취소</button><button class="primary-button" type="submit">후속조치 저장</button></footer></form></section></div>
+
     <div id="toast" class="toast" hidden></div>
-    <script type="module" src="/app.js"></script>
+    <script src="/app.js" type="module"></script>
   </body>
 </html>

@@ -52,7 +52,7 @@ test("demo seed creates canonical jobs and preserves multiple sources", () => {
     const jobs = listJobs(db, sources);
     assert.equal(jobs.length, 3);
     assert.equal(jobs[0].sources.length, 2);
-    const designer = jobs.find((job) => job.track === "Design");
+    const designer = jobs.find((job) => job.track === "탐색 직무");
     assert.equal(designer.primarySource.platform, "jobkorea");
     db.close();
   } finally {

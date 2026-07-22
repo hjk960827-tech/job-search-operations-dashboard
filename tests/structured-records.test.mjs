@@ -59,8 +59,10 @@ function genericItems() {
     },
     {
       id: "project-1", kind: "project", title: "검수 절차 개선", organization: "", role: "Contributor",
+      engagementType: "개인 프로젝트",
       startDate: "2025-01", endDate: "2025-06", summary: "검수 누락을 찾기 위한 체크 순서를 정리했습니다.",
-      highlights: ["검수 결과와 수정 이력을 함께 남겼습니다."], skills: ["문제 구조화"], sourceRefs: [], active: true,
+      highlights: ["검수 결과와 수정 이력을 함께 남겼습니다."], skills: ["문제 구조화"],
+      portfolioLinks: ["https://example.invalid/project"], sourceRefs: [], active: true,
     },
   ];
 }
@@ -79,6 +81,9 @@ test("structured resume management preserves exactly what a non-marketing user e
     assert.equal(JSON.stringify(stored).includes("marketing"), false);
     assert.equal(JSON.stringify(stored).includes("CRM"), false);
     assert.equal(stored.some((item) => !input.some((source) => source.id === item.id)), false);
+    const project = stored.find((item) => item.id === "project-1");
+    assert.equal(project.engagementType, "개인 프로젝트");
+    assert.deepEqual(project.portfolioLinks, ["https://example.invalid/project"]);
   } finally { cleanup(value); }
 });
 

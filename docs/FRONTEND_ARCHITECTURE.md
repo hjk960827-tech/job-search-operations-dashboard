@@ -1,8 +1,13 @@
 # Frontend Architecture
 
-The local backend is the shared operational core for the V2 and V3 frontends.
-Both frontends must read `GET /api/ui-contract` before enabling write actions.
-They must not infer capability from button visibility or duplicate workflow rules.
+The local release backend is the operational core for the default Free Agent frontend.
+The frontend must read `GET /api/ui-contract` before enabling write actions. It
+must not infer capability from button visibility or duplicate workflow rules.
+
+Before setup is complete, the server selects the dedicated files in
+`web-dashboard/onboarding-public/`. Those files expose only the 11-step setup
+workflow in onboarding mode. Completing setup reloads `/`, after which the same
+server serves the default Free Agent files in `web-dashboard/public/`.
 
 ## V2
 
@@ -10,7 +15,7 @@ V2 keeps the current operational dashboard structure and makes it usable for a
 new self-hosted user.
 
 1. Freeze the versioned UI contract and capability matrix.
-2. Add the current operational V2 shell as a separate frontend entry point.
+2. Build and verify the operational V2 shell in a temporary parallel entry point.
 3. Map generic bootstrap, job, workflow, resume, package, submission, outcome,
    notification, and companion responses through a frontend adapter.
 4. Replace personal assumptions with onboarding configuration and empty states.
@@ -20,6 +25,8 @@ new self-hosted user.
    bypassing existing checksums, revisions, leases, or approval gates.
 7. Verify demo read-only behavior, personal data isolation, clean-clone onboarding,
    desktop/mobile behavior, and V2 parity.
+8. Promote the verified shell to the default `/` path and remove the temporary
+   parallel copy so users have one frontend.
 
 Automatic application submission is not part of the V2 contract. A future
 platform adapter must remain disabled by default until receipt verification,
@@ -49,16 +56,16 @@ idempotency, account isolation, and recovery behavior have separate approval.
   region, platform priority, scoring, document section, and filename text out
   of HTML/CSS literals and bind it through the sanitized frontend view model.
 
-## V3
+## Future frontend replacement
 
-V3 is a frontend replacement, not a second backend.
+A future frontend change is a replacement, not a second backend.
 
 1. Define the new information architecture, navigation, and design tokens.
-2. Build a separate `/v3` frontend entry point against the same UI contract.
+2. Build a temporary parallel entry point against the same UI contract.
 3. Reuse the V2 API client and domain adapter without copying V2 DOM logic.
 4. Map domain navigation intents to V3 routes and implement responsive layouts.
-5. Run V2/V3 parity tests for every read model and write action.
-6. Keep V2 as the default until V3 passes shadow use and recovery checks.
+5. Run old/new parity tests for every read model and write action.
+6. Keep the current frontend as the default until the replacement passes shadow use and recovery checks.
 
 ## Contract Rules
 
@@ -89,16 +96,16 @@ agent.
 | Package create, edit, approve and PDF creation | Supported | Connected with backend `allowedActions` |
 | Manual submission preparation and submitted record | Supported | Connected with checksum and state gates |
 | Outcomes, corrections and follow-ups | Supported | Connected |
-| Local notifications | Supported per item | Connected; no mark-all control |
+| Local notifications | Supported | Connected, including mark-all |
 | Codex/Claude companion requests | Queue supported | Connected; an external signed-in local companion must process the request |
 | Jobplanet rating and review summary | Unsupported by policy | Not rendered |
 | Map view | Out of release scope | Not rendered |
-| Private document preview | No safe streaming route | Not rendered |
-| Approved PDF preview/download | No safe streaming route | Status only; no fake button |
-| Revise/hold/cancel-approval transitions | No route | Not rendered |
-| Cancel submission preparation | No route | Not rendered |
-| Mark all notifications read | No route | Not rendered |
-| Outcome evidence file upload | No route | Not rendered |
+| Private document open | Supported owner-only route | Connected with no-store response |
+| Approved PDF open | Supported owner-only route | Connected when an approved PDF exists |
+| Revise/hold/cancel-approval transitions | Supported | Connected with state gates |
+| Cancel submission preparation | Supported | Connected with confirmation |
+| Mark all notifications read | Supported | Connected |
+| Outcome evidence file upload | Supported | Connected to private local storage |
 | Automatic job application | Explicitly unsupported | Not rendered |
 
 Every hydrated job includes an `allowedActions` object. The backend computes

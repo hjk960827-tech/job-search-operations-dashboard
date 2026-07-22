@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Free Agent 개인 구직 기준과 로컬 문서를 안전하게 설정합니다.">
+    <title>Free Agent — 초기 설정</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand-and-nav"><h1>FREE AGENT</h1></div>
+        <div class="topbar-actions">
+          <span id="modeBadge" class="mode-badge">초기 설정</span>
+          <span id="displayName" class="profile-name"></span>
+          <button id="reloadButton" class="icon-button" type="button" aria-label="초기 설정 새로고침" title="초기 설정 새로고침">↻</button>
+        </div>
+      </header>
+      <div id="codespacesBanner" class="example-banner" hidden>
+        <strong>GitHub 임시 환경에서 실행 중</strong>
+        <span>기능 확인에는 합성 문서를 사용하고 실제 개인정보는 개인 컴퓨터에서 등록해 주세요.</span>
+      </div>
+      <main>
+        <section id="onboardingScreen" class="screen onboarding-screen" hidden>
+          <div class="section-head">
+            <div>
+              <p class="section-kicker">PERSONAL SETUP</p>
+              <h2>내 구직 기준 만들기</h2>
+              <p class="subtle">이력서의 사실을 확인하고 직무·조건·플랫폼을 내 기준으로 설정합니다.</p>
+            </div>
+            <span id="onboardingProgress" class="count-pill">1 / 11</span>
+          </div>
+
+          <div class="onboarding-layout">
+            <ol id="onboardingSteps" class="onboarding-steps" aria-label="초기 설정 단계"></ol>
+            <form id="onboardingForm" class="card onboarding-card">
+              <section class="onboarding-panel" data-onboarding-step="1">
+                <p class="section-kicker">1. 저장 안내</p>
+                <h3 id="onboardingStorageTitle">개인 자료는 이 컴퓨터에만 저장됩니다</h3>
+                <p id="onboardingStorageDescription">등록한 문서, 분석 결과, 설정과 개인 DB는 Git에 포함되지 않는 로컬 비공개 영역에 저장됩니다.</p>
+                <label class="consent-row"><input id="onboardingPrivacy" type="checkbox"><span>저장 위치와 공개 제외 원칙을 확인했습니다.</span></label>
+              </section>
+
+              <section class="onboarding-panel" data-onboarding-step="2" hidden>
+                <p class="section-kicker">2. 문서 등록</p>
+                <h3>기준 이력서를 등록해 주세요</h3>
+                <p>PDF·DOCX 이력서는 필수이며 포트폴리오는 선택입니다. HWP는 PDF로 변환한 뒤 등록해 주세요.</p>
+                <div class="upload-grid">
+                  <div class="upload-card">
+                    <label><span>이력서 · 필수</span><input id="resumeDocumentInput" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>
+                    <strong id="resumeDocumentStatus">등록된 문서 없음</strong>
+                    <button id="resumeDocumentDelete" class="text-button" type="button" hidden>이력서 제거</button>
+                  </div>
+                  <div class="upload-card">
+                    <label><span>포트폴리오 · 선택</span><input id="portfolioDocumentInput" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>
+                    <strong id="portfolioDocumentStatus">등록된 문서 없음</strong>
+                    <button id="portfolioDocumentDelete" class="text-button" type="button" hidden>포트폴리오 제거</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="onboarding-panel" data-onboarding-step="3" hidden>
+                <p class="section-kicker">3. 문서 분석</p>
+                <h3>Codex·Claude Code로 문서 내용을 구조화합니다</h3>
+                <p>아래 로컬 요청 파일을 에이전트에게 읽어 달라고 요청하세요. 에이전트는 근거가 있는 사실만 분석해야 합니다.</p>
+                <div class="agent-request-box"><code id="agentRequestPath"></code><button id="copyAgentPrompt" class="secondary-button" type="button">요청문 복사</button></div>
+                <label>
+                  <span>구조화 분석 결과 직접 붙여넣기</span>
+                  <textarea id="analysisJson" rows="12" placeholder='{"facts":[],"evidence":[],"sections":[],"suggested":{}}'></textarea>
+                </label>
+                <button id="saveAnalysis" class="primary-button" type="button">분석 결과 불러오기</button>
+                <p id="analysisStatus" class="subtle"></p>
+              </section>
+
+              <section class="onboarding-panel" data-onboarding-step="4" hidden>
+                <p class="section-kicker">4. 분석 결과 확인</p>
+                <h3>사용할 내용만 남겨 주세요</h3>
+                <p>각 항목을 수정하거나 제외할 수 있습니다. 확인한 항목만 이력서 기준과 근거 목록에 반영됩니다.</p>
+                <div id="analysisReview" class="analysis-review"></div>
+              </section>
+
+              <section class="onboarding-panel" data-onboarding-step="5" hidden>
+                <p class="section-kicker">5. 목표 설정</p>
+                <h3>찾고 있는 일을 알려 주세요</h3>
+                <div class="form-grid">
+                  <label><span>화면에 표시할 이름</span><input id="setupDisplayName" maxlength="160" placeholder="별명도 가능합니다"></label>
+                  <label><span>주 목표 직무</span><input id="setupPrimaryRole" maxlength="160" placeholder="예: Backend Engineer"></label>
+                  <label><span>보조 직무</span><input id="setupSecondaryRoles" placeholder="쉼표로 구분"></label>
+                  <label><span>경력 단계</span><select id="setupCareerStage" required><option value="">선택해 주세요</option><option value="entry">신입</option><option value="experienced">경력</option><option value="career_change">직무전환</option><option value="returning">경력복귀</option></select></label>
+                  <label><span>총 경력 연수</span><input id="setupYearsExperience" type="number" min="0" max="80" step="0.5"></label>
+                  <label><span>국가</span><input id="setupCountry" maxlength="20"></label>
+                  <label><span>시간대</span><input id="setupTimezone" maxlength="80"></label>
+                  <label><span>통화</span><input id="setupCurrency" maxlength="20"></label>
+                </div>
+                <details class="advanced-settings">
+                  <summary>최종 PDF 연락처 · 선택 입력</summary>
+                  <p>값과 체크 여부는 로컬 <code>profile.yml</code>에만 저장됩니다. 체크한 항목만 최종 PDF에 표시됩니다.</p>
+                  <div class="form-grid">
+                    <label><span>이메일</span><input id="setupEmail" type="email" autocomplete="email"></label>
+                    <label><span>전화번호</span><input id="setupPhone" autocomplete="tel"></label>
+                    <label><span>주소</span><input id="setupAddress" autocomplete="street-address"></label>
+                  </div>
+                  <div class="checkbox-grid">
+                    <label><input id="setupIncludeEmail" type="checkbox"> 이메일을 PDF에 표시</label>
+                    <label><input id="setupIncludePhone" type="checkbox"> 전화번호를 PDF에 표시</label>
+                    <label><input id="setupIncludeAddress" type="checkbox"> 주소를 PDF에 표시</label>
+                  </div>
+                </details>
+                <label><span>선호하는 업무</span><textarea id="setupDesiredWork" rows="4" placeholder="한 줄에 하나씩 입력"></textarea></label>
+                <label><span>피하고 싶은 업무</span><textarea id="setupAvoidedWork" rows="4" placeholder="한 줄에 하나씩 입력"></textarea></label>
+              </section>
+
+              <section class="onboarding-panel" data-onboarding-step="6" hidden>
+                <p class="section-kicker">6. 지원 조건</p>
+                <h3>공고를 고를 조건을 설정합니다</h3>
+                <div class="form-grid">
+                  <label><span>희망 지역</span><input id="setupRegions" list="regionSuggestions" placeholder="검색 또는 직접 입력, 쉼표로 여러 지역 구분"><datalist id="regionSuggestions"><option value="Remote"><option value="Seoul"><option value="Busan"><option value="Daejeon"><option value="Daegu"><option value="Incheon"><option value="Gwangju"><option value="Ulsan"><option value="Jeju"></datalist></label>
+                  <label><span>고용 형태</span><input id="setupEmploymentTypes" placeholder="정규직, 계약직 등"></label>
+                  <label><span>근무 방식</span><input id="setupWorkModes" placeholder="출근, 재택, 하이브리드 등"></label>
+                  <label><span>지원 경력 최소</span><input id="setupExperienceMinimum" type="number" min="0" max="80" step="0.5"></label>
+                  <label><span>지원 경력 최대</span><input id="setupExperienceMaximum" type="number" min="0" max="80" step="0.5"></label>
+                  <label><span>희망 연봉 최소</span><input id="setupSalaryMinimum" type="number" min="0" step="100"></label>
+                  <label><span>희망 연봉 목표</span><input id="setupSalaryTarget" type="number" min="0" step="100"></label>
+                </div>
+                <div class="form-grid">
+                  <label><span>선호 회사</span><input id="setupPreferredCompanies" placeholder="쉼표로 구분"></label>
+                  <label><span>제외 회사</span><input id="setupExcludedCompanies" placeholder="쉼표로 구분"></label>
+                  <label><span>선호 산업</span><input id="setupPreferredIndustries" placeholder="쉼표로 구분"></label>
+                  <label><span>제외 산업</span><input id="setupExcludedIndustries" placeholder="쉼표로 구분"></label>
+                </div>
+              </section>
+
+              <section class="onboarding-panel" data-onboarding-step="7" hidden>
+                <p class="section-kicker">7. 검색 전략</p>
+                <h3>검색어와 공고 분류를 확인해 주세요</h3>
+                <label><span>포함 키워드</span><textarea id="setupIncludeKeywords" rows="4" placeholder="한 줄 또는 쉼표로 구분"></textarea></label>
+                <label><span>제외 키워드</span><textarea id="setupExcludeKeywords" rows="4" placeholder="한 줄 또는 쉼표로 구분"></textarea></label>
+                <label><span>공고 트랙</span><input id="setupTracks" placeholder="공고를 나눠 볼 기준을 쉼표로 구분"></label>
+                <button id="applyAnalysisSuggestions" class="secondary-button" type="button">문서 분석 제안 불러오기</button>
+              </section>
+
+              <section class="onboarding-panel" data-onboarding-step="8" hidden>
+                <p class="section-kicker">8. 플랫폼</p>
+                <h3>어디서 찾고 어떤 링크를 먼저 볼지 정합니다</h3>
+                <label class="consent-row"><input id="setupPreferDirect" type="checkbox"><span>활성 기업 공식 채용페이지를 우선합니다.</span></label>
+                <div id="onboardingSources" class="onboarding-sources"></div>
+              </section>
+
+              <section class="onboarding-panel" data-onboarding-step="9" hidden>
+                <p class="section-kicker">9. 이력서 권한</p>
+                <h3>공고별로 바꿀 수 있는 항목을 선택합니다</h3>
+                <p>학력·경력·자격과 확인된 근무 이력은 보호됩니다. 아래 내용 항목만 수정 허용 여부를 선택합니다.</p>
+                <div id="setupEditableSections" class="checkbox-grid"></div>
+                <div id="setupCustomSections" class="custom-section-list"></div>
+              </section>
+
+              <section class="onboarding-panel" data-onboarding-step="10" hidden>
+                <p class="section-kicker">10. 공고 평가 기준</p>
+                <h3>지원 판단에서 중요하게 볼 기준을 정합니다</h3>
+                <p>활성 기준의 가중치 합계가 100이어야 합니다. 점수는 직무나 특정 회사에 고정되지 않습니다.</p>
+                <div id="setupScoringDimensions" class="scoring-dimensions"></div>
+                <p id="scoringWeightTotal" class="subtle">평가 기준 사용 안 함</p>
+                <label><span>이 점수 미만이면 검토 필요</span><input id="setupReviewBelow" type="number" min="0" max="100"></label>
+                <details class="advanced-settings"><summary>맞춤 문서 품질 기준</summary>
+                  <p>직무와 무관한 공통 기준입니다. 활성 기준의 가중치 합계가 100이어야 합니다.</p>
+                  <div id="setupQualityCriteria" class="scoring-dimensions"></div>
+                  <p id="qualityCriteriaWeightTotal" class="subtle"></p>
+                  <div class="form-grid"><label><span>최소 작성 완성도</span><input id="setupMinimumScore" type="number" min="0" max="100"></label><label><span>PDF 최대 페이지</span><input id="setupMaximumPages" type="number" min="1" max="10"></label></div>
+                </details>
+              </section>
+
+              <section class="onboarding-panel" data-onboarding-step="11" hidden>
+                <p class="section-kicker">11. 최종 확인</p>
+                <h3>내 설정을 확인하고 시작합니다</h3>
+                <div id="onboardingPreview" class="onboarding-preview"></div>
+                <button id="completeOnboarding" class="primary-button" type="button">이 설정으로 개인 대시보드 시작</button>
+              </section>
+
+              <div class="onboarding-actions">
+                <button id="previousOnboardingStep" class="secondary-button" type="button">이전</button>
+                <button id="nextOnboardingStep" class="primary-button" type="button">저장하고 다음</button>
+              </div>
+            </form>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast" hidden></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

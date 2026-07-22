@@ -37,10 +37,12 @@ import {
 } from "../lib/runtime.mjs";
 import {
   approvePackage,
+  cancelSubmissionPreparation,
   createPackage,
   prepareSubmission,
   publicPackage,
   recordSubmitted,
+  transitionPackageReview,
   updatePackage,
 } from "../lib/package-workflow.mjs";
 import { buildWorkflowOverview } from "../lib/workflow.mjs";
@@ -73,7 +75,9 @@ import {
 } from "../lib/companion-results.mjs";
 import {
   archivePersonalDocument,
+  deletePersonalDocument,
   getPersonalSettings,
+  readPersonalDocument,
   savePersonalSettings,
   uploadPersonalDocument,
 } from "../lib/personal-settings.mjs";
@@ -91,14 +95,18 @@ import {
   listJobOutcomes,
   listLocalNotifications,
   markNotificationRead,
+  markAllNotificationsRead,
   outcomeEventTypes,
   transitionFollowUp,
 } from "../lib/outcome-ledger.mjs";
+import { readOutcomeEvidence, storeOutcomeEvidence } from "../lib/result-attachment.mjs";
 import { deleteSavedFilter, listSavedFilters, saveFilter } from "../lib/saved-filters.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(here, "public");
+const onboardingPublicRoot = path.join(here, "onboarding-public");
 const realPublicRoot = fs.realpathSync(publicRoot);
+const realOnboardingPublicRoot = fs.realpathSync(onboardingPublicRoot);
 const requestedMode = runtimeMode();
 const host = runtimeHost();
 const port = runtimePort();
@@ -410,10 +418,13 @@ function jobPageOptions(url) {
     filters: {
       search: url.searchParams.get("search") || "",
       track: url.searchParams.get("track") || "",
+      region: url.searchParams.get("region") || "",
+      score: url.searchParams.get("score") || "",
       platform: url.searchParams.get("platform") || "",
       status: url.searchParams.get("status") || "",
       lifecycle: url.searchParams.get("lifecycle") || "active",
       deadline: url.searchParams.get("deadline") || "",
+      condition: url.searchParams.get("condition") || "",
       sort: url.searchParams.get("sort") || "score",
       favorite: url.searchParams.get("favorite") === "true",
     },
@@ -421,6 +432,8 @@ function jobPageOptions(url) {
 }
 
 function serveStatic(requestPath, response) {
+  const selectedRoot = runtime.mode === "onboarding" ? onboardingPublicRoot : publicRoot;
+  const selectedRealRoot = runtime.mode === "onboarding" ? realOnboardingPublicRoot : realPublicRoot;
   let decoded;
   try {
     decoded = decodeURIComponent(requestPath === "/" ? "/index.html" : requestPath);
@@ -429,8 +442,8 @@ function serveStatic(requestPath, response) {
     sendError(response, 400, "올바르지 않은 요청 경로입니다.");
     return;
   }
-  const candidate = path.resolve(publicRoot, `.${decoded}`);
-  const relative = path.relative(publicRoot, candidate);
+  const candidate = path.resolve(selectedRoot, `.${decoded}`);
+  const relative = path.relative(selectedRoot, candidate);
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     sendError(response, 403, "Forbidden path");
     return;
@@ -440,7 +453,7 @@ function serveStatic(requestPath, response) {
     return;
   }
   const realCandidate = fs.realpathSync(candidate);
-  const realRelative = path.relative(realPublicRoot, realCandidate);
+  const realRelative = path.relative(selectedRealRoot, realCandidate);
   if (realRelative === ".." || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) {
     sendError(response, 403, "Forbidden path");
     return;
@@ -618,6 +631,30 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, { ok: true, ...result, supersededTaskIds, resume: getResume(requireDatabase()), tasks: listCompanionTasks(requireDatabase()) });
       return;
     }
+    if (request.method === "GET" && /^\/api\/settings\/documents\/[^/]+\/file$/.test(url.pathname)) {
+      requirePersonalMode();
+      const documentId = decodeURIComponent(url.pathname.split("/")[4]);
+      const document = readPersonalDocument(requireDatabase(), documentId);
+      response.writeHead(200, {
+        "content-type": document.mimeType,
+        "content-length": document.body.length,
+        "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(document.fileName)}`,
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      });
+      response.end(document.body);
+      return;
+    }
+    if (request.method === "DELETE" && /^\/api\/settings\/documents\/[^/]+\/purge$/.test(url.pathname)) {
+      requirePersonalMode();
+      await readJsonBody(request);
+      const documentId = decodeURIComponent(url.pathname.split("/")[4]);
+      const result = deletePersonalDocument(requireDatabase(), documentId);
+      const supersededTaskIds = supersedeStaleCompanionResults(requireDatabase(), companionContext());
+      sendJson(response, 200, { ok: true, ...result, supersededTaskIds, resume: getResume(requireDatabase()), tasks: listCompanionTasks(requireDatabase()) });
+      return;
+    }
     if (request.method === "GET" && /^\/api\/jobs\/\d+\/outcomes$/.test(url.pathname)) {
       requirePersonalMode();
       const jobId = Number(url.pathname.split("/")[3]);
@@ -695,6 +732,33 @@ const server = http.createServer(async (request, response) => {
       requirePersonalMode();
       await readJsonBody(request);
       sendJson(response, 200, { ok: true, inbox: markNotificationRead(requireDatabase(), Number(url.pathname.split("/")[3])) });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/inbox/read-all") {
+      requirePersonalMode();
+      await readJsonBody(request);
+      sendJson(response, 200, { ok: true, inbox: markAllNotificationsRead(requireDatabase()) });
+      return;
+    }
+    if (request.method === "POST" && /^\/api\/outcomes\/\d+\/evidence$/.test(url.pathname)) {
+      requirePersonalMode();
+      const eventId = Number(url.pathname.split("/")[3]);
+      const evidence = await storeOutcomeEvidence(requireDatabase(), eventId, request);
+      sendJson(response, 201, { ok: true, evidence });
+      return;
+    }
+    if (request.method === "GET" && /^\/api\/outcomes\/\d+\/evidence$/.test(url.pathname)) {
+      requirePersonalMode();
+      const evidence = readOutcomeEvidence(requireDatabase(), Number(url.pathname.split("/")[3]));
+      response.writeHead(200, {
+        "content-type": evidence.mimeType,
+        "content-length": evidence.body.length,
+        "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(evidence.fileName)}`,
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      });
+      response.end(evidence.body);
       return;
     }
     if (request.method === "GET" && url.pathname === "/api/companion/tasks") {
@@ -854,6 +918,19 @@ const server = http.createServer(async (request, response) => {
         ...await readJsonBody(request),
         ...packageQualityOptions(),
       });
+      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), ...jobMutationPayload(packageValue.jobId) });
+      return;
+    }
+    if (request.method === "POST" && /^\/api\/packages\/\d+\/cancel-prepare$/.test(url.pathname)) {
+      const packageId = Number(url.pathname.split("/")[3]);
+      await readJsonBody(request);
+      const packageValue = cancelSubmissionPreparation(requireDatabase(), packageId, packageQualityOptions());
+      sendJson(response, 200, { ok: true, package: publicPackage(packageValue), ...jobMutationPayload(packageValue.jobId) });
+      return;
+    }
+    if (request.method === "PATCH" && /^\/api\/packages\/\d+\/review$/.test(url.pathname)) {
+      const packageId = Number(url.pathname.split("/")[3]);
+      const packageValue = transitionPackageReview(requireDatabase(), packageId, await readJsonBody(request), packageQualityOptions());
       sendJson(response, 200, { ok: true, package: publicPackage(packageValue), ...jobMutationPayload(packageValue.jobId) });
       return;
     }

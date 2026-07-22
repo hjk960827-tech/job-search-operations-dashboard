@@ -78,6 +78,12 @@ test("paginated summaries and lazy details preserve legacy result parity", () =>
     const archived = listJobPage(value.db, sourcesConfig, { page: 1, pageSize: 100, filters: { lifecycle: "archive" }, now });
     assert.equal(archived.total, 5);
     assert.equal(archived.items.every((item) => item.status === "closed"), true);
+    const remoteHighScore = listJobPage(value.db, sourcesConfig, { page: 1, pageSize: 100, filters: { lifecycle: "all", region: "Remote", score: "90", condition: "fulltime", sort: "company" }, now });
+    assert.equal(remoteHighScore.items.every((item) => item.location === "Remote" && item.score >= 90 && item.employmentType === "Full-time"), true);
+    assert.deepEqual(remoteHighScore.items.map((item) => item.companyName), [...remoteHighScore.items.map((item) => item.companyName)].sort());
+    assert.deepEqual(page.facets.locations, ["Hybrid", "Remote"]);
+    assert.equal(page.facets.counts.total, 140);
+    assert.equal(page.facets.counts.track.Engineering > 0, true);
   } finally {
     value.db.close();
     fs.rmSync(value.directory, { recursive: true, force: true });

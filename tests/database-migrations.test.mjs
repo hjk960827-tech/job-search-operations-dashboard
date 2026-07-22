@@ -163,7 +163,7 @@ test("a synthetic v0.2 database upgrades transactionally and preserves user data
     const result = prepareDatabase(value.file, { mode: "personal", backupDir: value.backupDir });
     assert.equal(result.migrated, true);
     assert.equal(result.fromVersion, 3);
-    assert.equal(result.toVersion, 11);
+    assert.equal(result.toVersion, 13);
     assert.equal(result.backup.checksum, before);
     assert.equal(checksum(result.backup.path), before);
     assert.equal(fs.statSync(result.backup.path).mode & 0o777, 0o600);
@@ -171,7 +171,7 @@ test("a synthetic v0.2 database upgrades transactionally and preserves user data
     const db = openDatabase(value.file);
     assert.deepEqual(
       currentMigrationManifest(db).map((row) => [row.version, row.source]),
-      [[1, "legacy_schema_version"], [2, "legacy_schema_version"], [3, "legacy_schema_version"], [4, "native"], [5, "native"], [6, "native"], [7, "native"], [8, "native"], [9, "native"], [10, "native"], [11, "native"]],
+      [[1, "legacy_schema_version"], [2, "legacy_schema_version"], [3, "legacy_schema_version"], [4, "native"], [5, "native"], [6, "native"], [7, "native"], [8, "native"], [9, "native"], [10, "native"], [11, "native"], [12, "native"], [13, "native"]],
     );
     assert.deepEqual(
       { ...db.prepare("SELECT job_key, company_name, title, summary FROM jobs").get() },
@@ -245,7 +245,7 @@ test("a clean install records native migrations and independent revision counter
     const db = openDatabase(value.file);
     assert.deepEqual(
       currentMigrationManifest(db).map((row) => [row.version, row.source]),
-      [[1, "native"], [2, "native"], [3, "native"], [4, "native"], [5, "native"], [6, "native"], [7, "native"], [8, "native"], [9, "native"], [10, "native"], [11, "native"]],
+      [[1, "native"], [2, "native"], [3, "native"], [4, "native"], [5, "native"], [6, "native"], [7, "native"], [8, "native"], [9, "native"], [10, "native"], [11, "native"], [12, "native"], [13, "native"]],
     );
     const before = Object.fromEntries(db.prepare("SELECT scope, revision FROM system_revisions").all().map((row) => [row.scope, row.revision]));
     const jobId = db.prepare("INSERT INTO jobs (job_key, company_name, title) VALUES ('revision-job', 'Example', 'Role')").run().lastInsertRowid;
@@ -268,7 +268,7 @@ test("a schema v4 install upgrades to the companion queue without changing exist
     createSyntheticVersion4(value.file);
     const result = prepareDatabase(value.file, { mode: "personal", backupDir: value.backupDir });
     assert.equal(result.fromVersion, 4);
-    assert.equal(result.toVersion, 11);
+    assert.equal(result.toVersion, 13);
     const db = openDatabase(value.file);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE job_key = 'v4-preserved'").get().count, 1);
     assert.notEqual(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'agent_tasks'").get(), undefined);
@@ -278,7 +278,7 @@ test("a schema v4 install upgrades to the companion queue without changing exist
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 8").get().source, "native");
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 9").get().source, "native");
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 10").get().source, "native");
-    assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 11").get().source, "native");
+    assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 12").get().source, "native");
     db.close();
   } finally {
     fs.rmSync(value.directory, { recursive: true, force: true });
@@ -291,7 +291,7 @@ test("a schema v5 install adds generic structured records without changing the e
     createSyntheticVersion5(value.file);
     const result = prepareDatabase(value.file, { mode: "personal", backupDir: value.backupDir });
     assert.equal(result.fromVersion, 5);
-    assert.equal(result.toVersion, 11);
+    assert.equal(result.toVersion, 13);
     const db = openDatabase(value.file);
     assert.equal(db.prepare("SELECT summary FROM resume_profile WHERE id = 1").get().summary, "v5 profile preserved");
     assert.notEqual(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'resume_assets'").get(), undefined);
@@ -301,7 +301,7 @@ test("a schema v5 install adds generic structured records without changing the e
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 8").get().source, "native");
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 9").get().source, "native");
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 10").get().source, "native");
-    assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 11").get().source, "native");
+    assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 12").get().source, "native");
     db.close();
   } finally {
     fs.rmSync(value.directory, { recursive: true, force: true });
@@ -314,7 +314,7 @@ test("a schema v6 install upgrades collection provenance without losing existing
     createSyntheticVersion6(value.file);
     const result = prepareDatabase(value.file, { mode: "personal", backupDir: value.backupDir });
     assert.equal(result.fromVersion, 6);
-    assert.equal(result.toVersion, 11);
+    assert.equal(result.toVersion, 13);
     const db = openDatabase(value.file);
     const source = db.prepare("SELECT platform, source_url, access_method, first_seen_at, last_seen_at FROM job_sources").get();
     assert.equal(source.platform, "direct");
@@ -326,7 +326,7 @@ test("a schema v6 install upgrades collection provenance without losing existing
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 8").get().source, "native");
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 9").get().source, "native");
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 10").get().source, "native");
-    assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 11").get().source, "native");
+    assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 12").get().source, "native");
     db.close();
   } finally {
     fs.rmSync(value.directory, { recursive: true, force: true });
@@ -339,7 +339,7 @@ test("a schema v7 install adds an append-only result ledger and local follow-up 
     createSyntheticVersion7(value.file);
     const result = prepareDatabase(value.file, { mode: "personal", backupDir: value.backupDir });
     assert.equal(result.fromVersion, 7);
-    assert.equal(result.toVersion, 11);
+    assert.equal(result.toVersion, 13);
     const db = openDatabase(value.file);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE job_key = 'v7-role'").get().count, 1);
     for (const table of ["application_events", "follow_ups", "local_notifications"]) {
@@ -348,7 +348,7 @@ test("a schema v7 install adds an append-only result ledger and local follow-up 
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 8").get().source, "native");
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 9").get().source, "native");
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 10").get().source, "native");
-    assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 11").get().source, "native");
+    assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 12").get().source, "native");
     db.close();
   } finally {
     fs.rmSync(value.directory, { recursive: true, force: true });
@@ -361,13 +361,13 @@ test("a schema v8 install adds generic saved filters without changing existing j
     createSyntheticVersion8(value.file);
     const result = prepareDatabase(value.file, { mode: "personal", backupDir: value.backupDir });
     assert.equal(result.fromVersion, 8);
-    assert.equal(result.toVersion, 11);
+    assert.equal(result.toVersion, 13);
     const db = openDatabase(value.file);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE job_key = 'v8-role'").get().count, 1);
     assert.notEqual(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'saved_filters'").get(), undefined);
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 9").get().source, "native");
     assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 10").get().source, "native");
-    assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 11").get().source, "native");
+    assert.equal(db.prepare("SELECT source FROM schema_migrations WHERE version = 12").get().source, "native");
     db.close();
   } finally {
     fs.rmSync(value.directory, { recursive: true, force: true });

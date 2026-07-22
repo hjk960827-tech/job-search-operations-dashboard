@@ -342,7 +342,8 @@ test("onboarding blocks unsafe documents and completes the browser workflow with
     assert.equal(await page.locator("#scoringWeightTotal").innerText(), "활성 가중치 합계 100 / 100");
     await page.getByRole("button", { name: "저장하고 다음" }).click();
     await page.getByRole("button", { name: "이 설정으로 개인 대시보드 시작" }).click();
-    await page.getByText("개인 데이터", { exact: true }).waitFor();
+    await page.locator(".brand-name", { hasText: "FREE AGENT" }).waitFor();
+    await page.locator("#modeBadge", { hasText: "개인 모드" }).waitFor();
 
     const scoring = await fetch(`${base}/api/scoring-profile`).then((response) => response.json());
     assert.equal(scoring.scoringProfile.configured, true);
@@ -370,25 +371,36 @@ test("onboarding blocks unsafe documents and completes the browser workflow with
         scoreBreakdown: { profileChecksum: scoring.scoringProfile.checksum, dimensions },
       }),
     });
-    assert.equal(imported.status, 201, await imported.text());
+    const importedBody = await imported.json();
+    assert.equal(imported.status, 201, JSON.stringify(importedBody));
     await page.reload({ waitUntil: "networkidle" });
-    await page.locator('[data-screen="jobs"]').click();
-    await page.locator("#jobList .job-card").first().click();
-    await page.locator(".score-breakdown-row").first().waitFor();
-    assert.equal(await page.locator(".score-breakdown-row").count(), 6);
-    const reviewing = page.waitForResponse((response) => /\/api\/jobs\/\d+\/state$/.test(response.url()) && response.request().method() === "PATCH");
-    await page.getByRole("button", { name: "공고 검토 시작" }).click();
-    assert.equal((await reviewing).status(), 200);
-    const created = page.waitForResponse((response) => /\/api\/jobs\/\d+\/package$/.test(response.url()) && response.request().method() === "POST");
-    await page.getByRole("button", { name: "공고별 작업본 만들기" }).click();
-    assert.equal((await created).status(), 201);
-    await page.locator("#jobDetail .package-state", { hasText: "승인 대기" }).waitFor();
-    const approved = page.waitForResponse((response) => /\/api\/packages\/\d+\/approve$/.test(response.url()), { timeout: 90000 });
-    await page.getByRole("button", { name: "문안 승인·PDF 생성" }).click();
-    assert.equal((await approved).status(), 200);
-    const prepared = page.waitForResponse((response) => /\/api\/packages\/\d+\/prepare$/.test(response.url()));
-    await page.getByRole("button", { name: "수기 제출 준비" }).click();
-    assert.equal((await prepared).status(), 200);
+    await page.locator("#jobRows tr[data-job-id]").first().click();
+    await page.locator("#jobDetail .score-breakdown > div").first().waitFor();
+    assert.equal(await page.locator("#jobDetail .score-breakdown > div").count(), 6);
+    const [reviewing] = await Promise.all([
+      page.waitForResponse((response) => /\/api\/jobs\/\d+\/state$/.test(response.url()) && response.request().method() === "PATCH"),
+      page.locator("#jobDetail").getByRole("button", { name: "공고 검토 시작", exact: true }).click(),
+    ]);
+    assert.equal(reviewing.status(), 200);
+    const [created] = await Promise.all([
+      page.waitForResponse((response) => /\/api\/jobs\/\d+\/package$/.test(response.url()) && response.request().method() === "POST"),
+      page.locator("#jobDetail").getByRole("button", { name: "공고별 작업본 만들기", exact: true }).click(),
+    ]);
+    assert.equal(created.status(), 201);
+    await page.locator("#resumeReviewScreen").waitFor();
+    await page.locator(`[data-review-job="${importedBody.jobId}"]`).click();
+    await page.getByRole("button", { name: "문안 승인·PDF 생성", exact: true }).click();
+    const [approved] = await Promise.all([
+      page.waitForResponse((response) => /\/api\/packages\/\d+\/approve$/.test(response.url()), { timeout: 90000 }),
+      page.locator("#confirmationConfirmButton").click(),
+    ]);
+    assert.equal(approved.status(), 200);
+    await page.getByRole("button", { name: "수기 제출 준비", exact: true }).click();
+    const [prepared] = await Promise.all([
+      page.waitForResponse((response) => /\/api\/packages\/\d+\/prepare$/.test(response.url())),
+      page.locator("#confirmationConfirmButton").click(),
+    ]);
+    assert.equal(prepared.status(), 200);
 
     const dbPath = path.join(directory, "data", "job_search_operations_dev.sqlite");
     assert.equal(fs.statSync(path.dirname(dbPath)).mode & 0o777, 0o700);
